@@ -51,8 +51,11 @@ const TelemetryLive = NodeSdk.layer(() => ({
 7. Verify traces and logs:
    curl ${config.otel.queryUrl}/api/services
    curl "${config.otel.queryUrl}/api/traces?service=<service-name>&limit=20&lookback=1h"
+   curl "${config.otel.queryUrl}/api/traces/search?service=<service-name>&operation=<text-fragment>&status=error"
    curl ${config.otel.queryUrl}/api/logs?service=<service-name>
    curl ${config.otel.queryUrl}/api/logs?service=<service-name>&body=<text-fragment>
+   curl ${config.otel.queryUrl}/api/facets?type=logs&field=severity
    bun run cli logs <service-name>
+   bun run cli search-logs <service-name> <text-fragment>
 
 Keep the change minimal and idiomatic for the target repo.`

@@ -115,7 +115,7 @@ const handleRequest = async (request: Request) => {
 
 	try {
 		if (request.method === "GET" && path === "/") {
-			return text(`leto local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces?service=<name>\nGET /api/traces/<trace-id>\nGET /api/logs?service=<name>\nGET /api/traces/<trace-id>/logs\nGET /trace/<trace-id>\n`)
+			return text(`leto local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/<trace-id>\nGET /api/logs\nGET /api/logs/search\nGET /api/traces/<trace-id>/logs\nGET /api/facets?type=logs&field=severity\nGET /trace/<trace-id>\n`)
 		}
 
 		if (request.method === "GET" && path === "/api/health") {
@@ -152,6 +152,22 @@ const handleRequest = async (request: Request) => {
 			return json({ data })
 		}
 
+		if (request.method === "GET" && path === "/api/traces/search") {
+			const data = await storeRuntime.runPromise(
+				buildStoreEffect((store) =>
+					store.searchTraces({
+						serviceName: url.searchParams.get("service"),
+						operation: url.searchParams.get("operation"),
+						status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
+						minDurationMs: url.searchParams.get("minDurationMs") ? Number.parseFloat(url.searchParams.get("minDurationMs") ?? "") : null,
+						limit: parseLimit(url.searchParams.get("limit"), config.otel.traceFetchLimit),
+						lookbackMinutes: parseLookbackMinutes(url.searchParams.get("lookback"), config.otel.traceLookbackMinutes),
+					}),
+				),
+			)
+			return json({ data })
+		}
+
 		if (request.method === "GET" && path.startsWith("/api/traces/") && path.endsWith("/logs")) {
 			const traceId = decodeURIComponent(path.slice("/api/traces/".length, -"/logs".length))
 			const data = await storeRuntime.runPromise(buildStoreEffect((store) => store.listTraceLogs(traceId)))
@@ -180,6 +196,51 @@ const handleRequest = async (request: Request) => {
 						body: url.searchParams.get("body"),
 						limit: parseLimit(url.searchParams.get("limit"), config.otel.logFetchLimit),
 						attributeFilters,
+					}),
+				),
+			)
+
+			return json({ data })
+		}
+
+		if (request.method === "GET" && path === "/api/logs/search") {
+			const attributeFilters = Object.fromEntries(
+				[...url.searchParams.entries()]
+					.filter(([key]) => key.startsWith("attr."))
+					.map(([key, value]) => [key.slice("attr.".length), value]),
+			)
+
+			const data = await storeRuntime.runPromise(
+				buildStoreEffect((store) =>
+					store.searchLogs({
+						serviceName: url.searchParams.get("service"),
+						traceId: url.searchParams.get("traceId"),
+						spanId: url.searchParams.get("spanId"),
+						body: url.searchParams.get("body"),
+						limit: parseLimit(url.searchParams.get("limit"), config.otel.logFetchLimit),
+						attributeFilters,
+					}),
+				),
+			)
+
+			return json({ data })
+		}
+
+		if (request.method === "GET" && path === "/api/facets") {
+			const type = url.searchParams.get("type")
+			const field = url.searchParams.get("field")
+			if ((type !== "traces" && type !== "logs") || !field) {
+				return json({ error: "Expected type=traces|logs and field=<name>" }, 400)
+			}
+
+			const data = await storeRuntime.runPromise(
+				buildStoreEffect((store) =>
+					store.listFacets({
+						type,
+						field,
+						serviceName: url.searchParams.get("service"),
+						lookbackMinutes: parseLookbackMinutes(url.searchParams.get("lookback"), config.otel.traceLookbackMinutes),
+						limit: parseLimit(url.searchParams.get("limit"), 20),
 					}),
 				),
 			)

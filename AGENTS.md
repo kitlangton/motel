@@ -6,8 +6,11 @@
 - Run the local server only: `bun run server`
 - Query services via CLI: `bun run cli services`
 - Query traces via CLI: `bun run cli traces <service> [limit]`
+- Search traces via CLI: `bun run cli search-traces <service> [operation]`
 - Query logs via CLI: `bun run cli logs <service>`
+- Search logs via CLI: `bun run cli search-logs <service> [body]`
 - Query logs for one trace: `bun run cli trace-logs <trace-id>`
+- Query facets via CLI: `bun run cli facets <traces|logs> <field>`
 - Print Effect setup instructions: `bun run instructions`
 - Typecheck: `bun run typecheck`
 

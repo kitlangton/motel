@@ -7,6 +7,7 @@ export class TraceQueryService extends ServiceMap.Service<
 	{
 		readonly listServices: Effect.Effect<readonly string[], Error>
 		readonly listRecentTraces: (serviceName: string, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceItem[], Error>
+		readonly searchTraces: (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceItem[], Error>
 		readonly getTrace: (traceId: string) => Effect.Effect<TraceItem | null, Error>
 	}
 >()("leto/TraceQueryService") {}
@@ -31,11 +32,15 @@ export const TraceQueryServiceLive = Layer.effect(
 			return traces
 		})
 
+		const searchTraces = Effect.fn("leto/TraceQueryService.searchTraces")(function* (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number }) {
+			return yield* store.searchTraces(input)
+		})
+
 		const getTrace = Effect.fn("leto/TraceQueryService.getTrace")(function* (traceId: string) {
 			yield* Effect.annotateCurrentSpan("trace.trace_id", traceId)
 			return yield* store.getTrace(traceId)
 		})
 
-		return TraceQueryService.of({ listServices, listRecentTraces, getTrace })
+		return TraceQueryService.of({ listServices, listRecentTraces, searchTraces, getTrace })
 	}),
 )

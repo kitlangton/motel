@@ -45,6 +45,28 @@ interface LogSearch {
 	readonly attributeFilters?: Readonly<Record<string, string>>
 }
 
+interface TraceSearch {
+	readonly serviceName?: string | null
+	readonly operation?: string | null
+	readonly status?: "ok" | "error" | null
+	readonly minDurationMs?: number | null
+	readonly lookbackMinutes?: number
+	readonly limit?: number
+}
+
+interface FacetItem {
+	readonly value: string
+	readonly count: number
+}
+
+interface FacetSearch {
+	readonly type: "traces" | "logs"
+	readonly field: string
+	readonly serviceName?: string | null
+	readonly lookbackMinutes?: number
+	readonly limit?: number
+}
+
 const parseRecord = (value: string): Record<string, string> => {
 	try {
 		const parsed = JSON.parse(value) as Record<string, unknown>
@@ -156,8 +178,10 @@ export class TelemetryStore extends ServiceMap.Service<
 		readonly ingestLogs: (payload: OtlpLogExportRequest) => Effect.Effect<{ readonly insertedLogs: number }, Error>
 		readonly listServices: Effect.Effect<readonly string[], Error>
 		readonly listRecentTraces: (serviceName: string | null, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceItem[], Error>
+		readonly searchTraces: (input: TraceSearch) => Effect.Effect<readonly TraceItem[], Error>
 		readonly getTrace: (traceId: string) => Effect.Effect<TraceItem | null, Error>
 		readonly searchLogs: (input: LogSearch) => Effect.Effect<readonly LogItem[], Error>
+		readonly listFacets: (input: FacetSearch) => Effect.Effect<readonly FacetItem[], Error>
 		readonly listRecentLogs: (serviceName: string) => Effect.Effect<readonly LogItem[], Error>
 		readonly listTraceLogs: (traceId: string) => Effect.Effect<readonly LogItem[], Error>
 	}
@@ -410,6 +434,66 @@ export const TelemetryStoreLive = Layer.sync(
 			})
 		})
 
+		const searchTraces = Effect.fn("leto/TelemetryStore.searchTraces")(function* (input: TraceSearch) {
+			yield* cleanupExpired()
+			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
+			const limit = input.limit ?? config.otel.traceFetchLimit
+			const candidateLimit = Math.max(limit * 10, 200)
+
+			return yield* Effect.sync(() => {
+				const traceIdRows = input.serviceName
+					? (db.query(`
+						SELECT trace_id, MAX(start_time_ms) AS latest_start
+						FROM spans
+						WHERE service_name = ? AND start_time_ms >= ?
+						GROUP BY trace_id
+						ORDER BY latest_start DESC
+						LIMIT ?
+					`).all(input.serviceName, cutoff, candidateLimit) as Array<{ trace_id: string }>)
+					: (db.query(`
+						SELECT trace_id, MAX(start_time_ms) AS latest_start
+						FROM spans
+						WHERE start_time_ms >= ?
+						GROUP BY trace_id
+						ORDER BY latest_start DESC
+						LIMIT ?
+					`).all(cutoff, candidateLimit) as Array<{ trace_id: string }>)
+
+				const traceIds = traceIdRows.map((row) => row.trace_id)
+				if (traceIds.length === 0) return [] as readonly TraceItem[]
+
+				const placeholders = traceIds.map(() => "?").join(", ")
+				const rows = db.query(`
+					SELECT * FROM spans
+					WHERE trace_id IN (${placeholders})
+					ORDER BY start_time_ms ASC
+				`).all(...traceIds) as SpanRow[]
+
+				const grouped = new Map<string, SpanRow[]>()
+				for (const row of rows) {
+					const group = grouped.get(row.trace_id) ?? []
+					group.push(row)
+					grouped.set(row.trace_id, group)
+				}
+
+				return traceIds
+					.map((traceId) => grouped.get(traceId))
+					.filter((group): group is SpanRow[] => group !== undefined)
+					.map((group) => buildTrace(group[0]!.trace_id, group))
+					.filter((trace) => {
+						if (input.status === "error" && trace.errorCount === 0) return false
+						if (input.status === "ok" && trace.errorCount > 0) return false
+						if (input.minDurationMs !== undefined && input.minDurationMs !== null && trace.durationMs < input.minDurationMs) return false
+						if (input.operation) {
+							const needle = input.operation.toLowerCase()
+							if (!trace.spans.some((span) => span.operationName.toLowerCase().includes(needle))) return false
+						}
+						return true
+					})
+					.slice(0, limit)
+			})
+		})
+
 		const searchLogs = Effect.fn("leto/TelemetryStore.searchLogs")(function* (input: LogSearch) {
 			yield* cleanupExpired()
 			return yield* Effect.sync(() => {
@@ -458,6 +542,98 @@ export const TelemetryStoreLive = Layer.sync(
 			return yield* searchLogs({ serviceName, limit: config.otel.logFetchLimit })
 		})
 
+		const listFacets = Effect.fn("leto/TelemetryStore.listFacets")(function* (input: FacetSearch) {
+			yield* cleanupExpired()
+			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
+			const limit = input.limit ?? 20
+
+			return yield* Effect.sync(() => {
+				if (input.type === "logs") {
+					if (input.field === "service") {
+						const rows = db.query(`
+							SELECT service_name AS value, COUNT(*) AS count
+							FROM logs
+							WHERE timestamp_ms >= ?
+							GROUP BY service_name
+							ORDER BY count DESC, value ASC
+							LIMIT ?
+						`).all(cutoff, limit) as Array<{ value: string; count: number }>
+						return rows
+					}
+					if (input.field === "severity") {
+						const rows = db.query(`
+							SELECT severity_text AS value, COUNT(*) AS count
+							FROM logs
+							WHERE timestamp_ms >= ?
+							${input.serviceName ? "AND service_name = ?" : ""}
+							GROUP BY severity_text
+							ORDER BY count DESC, value ASC
+							LIMIT ?
+						`).all(...(input.serviceName ? [cutoff, input.serviceName, limit] : [cutoff, limit])) as Array<{ value: string; count: number }>
+						return rows
+					}
+					if (input.field === "scope") {
+						const rows = db.query(`
+							SELECT COALESCE(scope_name, 'unknown') AS value, COUNT(*) AS count
+							FROM logs
+							WHERE timestamp_ms >= ?
+							${input.serviceName ? "AND service_name = ?" : ""}
+							GROUP BY COALESCE(scope_name, 'unknown')
+							ORDER BY count DESC, value ASC
+							LIMIT ?
+						`).all(...(input.serviceName ? [cutoff, input.serviceName, limit] : [cutoff, limit])) as Array<{ value: string; count: number }>
+						return rows
+					}
+				}
+
+				if (input.type === "traces") {
+					if (input.field === "service") {
+						const rows = db.query(`
+							SELECT service_name AS value, COUNT(DISTINCT trace_id) AS count
+							FROM spans
+							WHERE start_time_ms >= ?
+							GROUP BY service_name
+							ORDER BY count DESC, value ASC
+							LIMIT ?
+						`).all(cutoff, limit) as Array<{ value: string; count: number }>
+						return rows
+					}
+					if (input.field === "operation") {
+						const rows = db.query(`
+							SELECT operation_name AS value, COUNT(*) AS count
+							FROM spans
+							WHERE start_time_ms >= ? AND parent_span_id IS NULL
+							${input.serviceName ? "AND service_name = ?" : ""}
+							GROUP BY operation_name
+							ORDER BY count DESC, value ASC
+							LIMIT ?
+						`).all(...(input.serviceName ? [cutoff, input.serviceName, limit] : [cutoff, limit])) as Array<{ value: string; count: number }>
+						return rows
+					}
+					if (input.field === "status") {
+						const traces = (db.query(`
+							SELECT trace_id
+							FROM spans
+							WHERE start_time_ms >= ?
+							${input.serviceName ? "AND service_name = ?" : ""}
+							GROUP BY trace_id
+							ORDER BY MAX(start_time_ms) DESC
+						`).all(...(input.serviceName ? [cutoff, input.serviceName] : [cutoff])) as Array<{ trace_id: string }>)
+
+						const result = new Map<string, number>()
+						for (const row of traces) {
+							const group = db.query(`SELECT COUNT(*) AS count FROM spans WHERE trace_id = ? AND status = 'error'`).get(row.trace_id) as { count: number }
+							const value = group.count > 0 ? "error" : "ok"
+							result.set(value, (result.get(value) ?? 0) + 1)
+						}
+						return [...result.entries()].map(([value, count]) => ({ value, count })).slice(0, limit)
+					}
+				}
+
+				return [] as FacetItem[]
+			})
+		})
+
 		const listTraceLogs = Effect.fn("leto/TelemetryStore.listTraceLogs")(function* (traceId: string) {
 			return yield* searchLogs({ traceId, limit: config.otel.logFetchLimit })
 		})
@@ -467,8 +643,10 @@ export const TelemetryStoreLive = Layer.sync(
 			ingestLogs,
 			listServices,
 			listRecentTraces,
+			searchTraces,
 			getTrace,
 			searchLogs,
+			listFacets,
 			listRecentLogs,
 			listTraceLogs,
 		})

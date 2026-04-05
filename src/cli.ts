@@ -36,6 +36,22 @@ switch (command) {
 		break
 	}
 
+	case "search-traces": {
+		const service = args[0] ?? config.otel.serviceName
+		const operation = args[1] ?? undefined
+		const result = await runQuiet(
+			Effect.flatMap(TraceQueryService.asEffect(), (query) =>
+				query.searchTraces({
+					serviceName: service,
+					operation,
+					limit: config.otel.traceFetchLimit,
+				}),
+			),
+		)
+		console.log(JSON.stringify(result, null, 2))
+		break
+	}
+
 	case "instructions": {
 		console.log(effectSetupInstructions())
 		break
@@ -48,6 +64,22 @@ switch (command) {
 		break
 	}
 
+	case "search-logs": {
+		const service = args[0] ?? config.otel.serviceName
+		const body = args[1] ?? undefined
+		const result = await runQuiet(
+			Effect.flatMap(LogQueryService.asEffect(), (query) =>
+				query.searchLogs({
+					serviceName: service,
+					body,
+					limit: config.otel.logFetchLimit,
+				}),
+			),
+		)
+		console.log(JSON.stringify(result, null, 2))
+		break
+	}
+
 	case "trace-logs": {
 		const traceId = args[0]
 		if (!traceId) {
@@ -55,6 +87,22 @@ switch (command) {
 		}
 
 		const result = await runQuiet(Effect.flatMap(LogQueryService.asEffect(), (query) => query.listTraceLogs(traceId)))
+		console.log(JSON.stringify(result, null, 2))
+		break
+	}
+
+	case "facets": {
+		const type = args[0]
+		const field = args[1]
+		if ((type !== "traces" && type !== "logs") || !field) {
+			throw new Error("Usage: bun run cli facets <traces|logs> <field>")
+		}
+
+		const result = await runQuiet(
+			Effect.flatMap(LogQueryService.asEffect(), (query) =>
+				query.listFacets({ type, field, limit: 20 }),
+			),
+		)
 		console.log(JSON.stringify(result, null, 2))
 		break
 	}
@@ -75,8 +123,11 @@ switch (command) {
 	bun run cli services
 	bun run cli traces [service] [limit]
 	bun run cli trace <trace-id>
+	bun run cli search-traces [service] [operation]
 	bun run cli logs [service]
+	bun run cli search-logs [service] [body]
 	bun run cli trace-logs <trace-id>
+	bun run cli facets <traces|logs> <field>
 	bun run cli instructions
 	bun run cli endpoints`)
 	}

@@ -8,6 +8,7 @@ export class LogQueryService extends ServiceMap.Service<
 		readonly listRecentLogs: (serviceName: string) => Effect.Effect<readonly LogItem[], Error>
 		readonly listTraceLogs: (traceId: string) => Effect.Effect<readonly LogItem[], Error>
 		readonly searchLogs: (input: { readonly serviceName?: string; readonly traceId?: string; readonly spanId?: string; readonly body?: string; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly LogItem[], Error>
+		readonly listFacets: (input: { readonly type: "traces" | "logs"; readonly field: string; readonly serviceName?: string | null; readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly { readonly value: string; readonly count: number }[], Error>
 	}
 >()("leto/LogQueryService") {}
 
@@ -34,6 +35,10 @@ export const LogQueryServiceLive = Layer.effect(
 			return yield* store.searchLogs(input)
 		})
 
-		return LogQueryService.of({ listRecentLogs, listTraceLogs, searchLogs })
+		const listFacets = Effect.fn("leto/LogQueryService.listFacets")(function* (input: { readonly type: "traces" | "logs"; readonly field: string; readonly serviceName?: string | null; readonly lookbackMinutes?: number; readonly limit?: number }) {
+			return yield* store.listFacets(input)
+		})
+
+		return LogQueryService.of({ listRecentLogs, listTraceLogs, searchLogs, listFacets })
 	}),
 )
