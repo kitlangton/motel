@@ -51,6 +51,9 @@ export const TraceList = ({
 	contentWidth,
 	services,
 	selectedService,
+	focused = true,
+	filterText,
+	totalCount,
 	onSelectTrace,
 }: {
 	showHeader: boolean
@@ -61,13 +64,18 @@ export const TraceList = ({
 	contentWidth: number
 	services: readonly string[]
 	selectedService: string | null
+	focused?: boolean
+	filterText?: string
+	totalCount?: number
 	onSelectTrace: (traceId: string) => void
 }) => {
 	if (showHeader) {
+		const filterLabel = filterText ? ` \u00b7 filter: ${filterText}` : ""
+		const countLabel = totalCount !== undefined && totalCount !== traces.length ? ` (${traces.length}/${totalCount})` : ` (${traces.length})`
 		return (
 			<AlignedHeaderLine
-				left="LOCAL TRACES"
-				right={`service \u00b7 ${selectedService ?? "waiting for traces"} (${services.length}) \u00b7 ${config.otel.queryUrl}`}
+				left={`${focused ? "\u25b8 " : "  "}LOCAL TRACES${countLabel}${filterLabel}`}
+				right={`${selectedService ?? "waiting for traces"} \u00b7 ${services.length} svc`}
 				width={contentWidth}
 			/>
 		)

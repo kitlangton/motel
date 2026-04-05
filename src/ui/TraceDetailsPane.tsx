@@ -14,6 +14,7 @@ export const TraceDetailsPane = ({
 	selectedSpanIndex,
 	collapsedSpanIds,
 	detailView,
+	focused = false,
 	onSelectSpan,
 }: {
 	trace: TraceItem | null
@@ -24,6 +25,7 @@ export const TraceDetailsPane = ({
 	selectedSpanIndex: number | null
 	collapsedSpanIds: ReadonlySet<string>
 	detailView: DetailView
+	focused?: boolean
 	onSelectSpan: (index: number) => void
 }) => {
 	const filteredSpans = trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : []
@@ -35,9 +37,10 @@ export const TraceDetailsPane = ({
 		if (!log.spanId) continue
 		spanLogCounts.set(log.spanId, (spanLogCounts.get(log.spanId) ?? 0) + 1)
 	}
+	const focusIndicator = focused ? "\u25b8 " : "  "
 	const detailHeaderTitle = detailView === "span-detail" && selectedSpan
-		? "SPAN DETAIL"
-			: "TRACE DETAILS"
+		? `${focusIndicator}SPAN DETAIL`
+			: `${focusIndicator}TRACE DETAILS`
 	const detailHeaderRight = detailView === "span-detail" && selectedSpan
 		? `${selectedSpan.status} \u00b7 ${formatDuration(selectedSpan.durationMs)}${selectedSpanLogs.length > 0 ? ` \u00b7 ${selectedSpanLogs.length} logs` : ""}`
 		: trace

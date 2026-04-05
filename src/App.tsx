@@ -4,11 +4,14 @@ import { useTerminalDimensions } from "@opentui/react"
 import { useEffect, useRef } from "react"
 import { config } from "./config.js"
 import { fitCell, formatShortDate, formatTimestamp, traceRowId } from "./ui/format.ts"
-import { AlignedHeaderLine, BlankRow, Divider, FooterHints, PlainLine, SeparatorColumn, TextLine } from "./ui/primitives.tsx"
+import { AlignedHeaderLine, BlankRow, Divider, FilterBar, FooterHints, PlainLine, SeparatorColumn, TextLine } from "./ui/primitives.tsx"
 import { ServiceLogsView } from "./ui/ServiceLogs.tsx"
 import {
+	autoRefreshAtom,
 	collapsedSpanIdsAtom,
 	detailViewAtom,
+	filterModeAtom,
+	filterTextAtom,
 	initialLogState,
 	initialServiceLogState,
 	loadRecentTraces,
@@ -47,6 +50,9 @@ export const App = () => {
 	const [detailView, setDetailView] = useAtom(detailViewAtom)
 	const [showHelp, setShowHelp] = useAtom(showHelpAtom)
 	const [collapsedSpanIds, setCollapsedSpanIds] = useAtom(collapsedSpanIdsAtom)
+	const [autoRefresh] = useAtom(autoRefreshAtom)
+	const [filterMode] = useAtom(filterModeAtom)
+	const [filterText] = useAtom(filterTextAtom)
 
 	// Layout calculations
 	const contentWidth = Math.max(60, width ?? 100)
@@ -81,6 +87,7 @@ export const App = () => {
 	// Refs
 	const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const traceListScrollRef = useRef<ScrollBoxRenderable | null>(null)
+	const selectedTraceRef = useRef<string | null>(null)
 
 	const flashNotice = (message: string) => {
 		if (noticeTimeoutRef.current !== null) {
@@ -99,13 +106,16 @@ export const App = () => {
 		}
 	}, [])
 
-	const initialServiceRef = useRef(selectedTraceService)
 	useEffect(() => {
-		if (selectedTraceService && selectedTraceService !== initialServiceRef.current) {
-			persistSelectedService(selectedTraceService)
-		}
-		initialServiceRef.current = null
+		if (selectedTraceService) persistSelectedService(selectedTraceService)
 	}, [selectedTraceService])
+
+	// Auto-refresh every 5 seconds
+	useEffect(() => {
+		if (!autoRefresh) return
+		const id = setInterval(() => setRefreshNonce((n) => n + 1), 5000)
+		return () => clearInterval(id)
+	}, [autoRefresh])
 
 	// Load traces
 	useEffect(() => {
@@ -133,6 +143,8 @@ export const App = () => {
 				const traces = effectiveService ? await loadRecentTraces(effectiveService) : []
 				if (cancelled) return
 
+				// Preserve selection by trace ID across refreshes
+				const prevTraceId = selectedTraceRef.current
 				setTraceState({
 					status: "ready",
 					services,
@@ -140,6 +152,10 @@ export const App = () => {
 					error: null,
 					fetchedAt: new Date(),
 				})
+				if (prevTraceId) {
+					const newIndex = traces.findIndex((t) => t.traceId === prevTraceId)
+					if (newIndex >= 0) setSelectedTraceIndex(newIndex)
+				}
 			} catch (error) {
 				if (cancelled) return
 				setTraceState((current) => ({
@@ -166,6 +182,7 @@ export const App = () => {
 	}, [traceState.data.length])
 
 	const selectedTrace = traceState.data[selectedTraceIndex] ?? null
+	selectedTraceRef.current = selectedTrace?.traceId ?? null
 
 	// Reset collapsed spans and span selection when trace changes
 	useEffect(() => {
@@ -314,9 +331,10 @@ export const App = () => {
 	})
 
 	// Header
+	const autoLabel = autoRefresh ? "\u25cf live" : "\u25cb paused"
 	const headerLeft = `LETO OTEL  service: ${selectedTraceService ?? "none"}`
 	const headerRight = traceState.fetchedAt
-		? `updated ${formatShortDate(traceState.fetchedAt)} ${formatTimestamp(traceState.fetchedAt)}`
+		? `${autoLabel}  ${formatTimestamp(traceState.fetchedAt)}`
 		: traceState.status === "loading"
 			? "loading traces..."
 			: ""
@@ -334,14 +352,29 @@ export const App = () => {
 		setSelectedSpanIndex(Math.max(0, Math.min(index, visibleCount - 1)))
 	}
 
+	// Apply trace filter
+	const filteredTraces = filterText
+		? traceState.data.filter((trace) => {
+			const needle = filterText.toLowerCase()
+			const errorOnly = needle.includes(":error")
+			const textNeedle = needle.replace(":error", "").trim()
+			if (errorOnly && trace.errorCount === 0) return false
+			if (textNeedle && !trace.rootOperationName.toLowerCase().includes(textNeedle)) return false
+			return true
+		})
+		: traceState.data
+
 	const traceListProps = {
-		traces: traceState.data,
+		traces: filteredTraces,
 		selectedTraceId: selectedTrace?.traceId ?? null,
 		status: traceState.status,
 		error: traceState.error,
 		contentWidth: leftContentWidth,
 		services: traceState.services,
 		selectedService: selectedTraceService,
+		focused: !spanNavActive,
+		filterText: filterText || undefined,
+		totalCount: filterText ? traceState.data.length : undefined,
 		onSelectTrace: selectTraceById,
 	} as const
 
@@ -378,24 +411,26 @@ export const App = () => {
 				<box flexGrow={1} flexDirection="row">
 					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
 						<TraceList showHeader {...traceListProps} />
-						<scrollbox ref={traceListScrollRef} height={wideTraceListBodyHeight} flexGrow={0}>
+						{filterMode ? <FilterBar text={filterText} width={leftContentWidth} /> : null}
+						<scrollbox ref={traceListScrollRef} height={filterMode ? wideTraceListBodyHeight - 1 : wideTraceListBodyHeight} flexGrow={0}>
 							<TraceList showHeader={false} {...traceListProps} />
 						</scrollbox>
 					</box>
 					<SeparatorColumn height={wideBodyHeight} junctionRow={DETAIL_DIVIDER_ROW} />
 					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
 						<scrollbox height={wideBodyHeight} flexGrow={0}>
-							<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} onSelectSpan={selectSpan} />
+							<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
 						</scrollbox>
 					</box>
 				</box>
 			) : (
 				<>
-					<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={narrowBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} onSelectSpan={selectSpan} />
+					<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={narrowBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
 					<Divider width={contentWidth} />
 					<box height={narrowListHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
 						<TraceList showHeader {...traceListProps} />
-						<scrollbox ref={traceListScrollRef} height={narrowTraceListBodyHeight} flexGrow={0}>
+						{filterMode ? <FilterBar text={filterText} width={leftContentWidth} /> : null}
+						<scrollbox ref={traceListScrollRef} height={filterMode ? narrowTraceListBodyHeight - 1 : narrowTraceListBodyHeight} flexGrow={0}>
 							<TraceList showHeader={false} {...traceListProps} />
 						</scrollbox>
 					</box>

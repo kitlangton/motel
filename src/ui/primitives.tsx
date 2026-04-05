@@ -63,17 +63,25 @@ export const SeparatorColumn = ({ height, junctionRow }: { height: number; junct
 	</box>
 )
 
+export const FilterBar = ({ text, width }: { text: string; width: number }) => (
+	<TextLine fg={colors.accent}>
+		<span fg={colors.muted}>{"/"}</span>
+		<span fg={colors.text}>{fitCell(text, width - 2)}</span>
+		<span fg={colors.accent}>{"\u2588"}</span>
+	</TextLine>
+)
+
 export const FooterHints = ({ spanNavActive, detailView, width }: { spanNavActive: boolean; detailView: DetailView; width: number }) => {
 	const firstLine = "j/k move  ^n/^p trace  ^d/^u page  gg/G top/end"
 	const secondLine = [
 		detailView === "service-logs" ? "enter trace" : `enter ${spanNavActive && detailView === "waterfall" ? "detail" : "spans"}`,
 		spanNavActive ? `esc ${detailView === "span-detail" ? "back" : "traces"}` : null,
-		"tab/l logs",
-		"[ ] service",
-		"? hide",
+		"/ filter",
+		"a live",
+		"tab logs",
+		"[ ] svc",
 		"r ref",
 		"o open",
-		"c copy",
 		"q quit",
 	]
 		.filter((segment) => segment !== null)

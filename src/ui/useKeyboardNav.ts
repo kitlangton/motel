@@ -5,8 +5,11 @@ import type { TraceItem } from "../domain.ts"
 import { effectSetupInstructions } from "../instructions.ts"
 import { copyToClipboard, traceUiUrl } from "./format.ts"
 import {
+	autoRefreshAtom,
 	collapsedSpanIdsAtom,
 	detailViewAtom,
+	filterModeAtom,
+	filterTextAtom,
 	refreshNonceAtom,
 	selectedServiceLogIndexAtom,
 	selectedSpanIndexAtom,
@@ -50,6 +53,9 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [showHelp, setShowHelp] = useAtom(showHelpAtom)
 	const [, setRefreshNonce] = useAtom(refreshNonceAtom)
 	const [collapsedSpanIds, setCollapsedSpanIds] = useAtom(collapsedSpanIdsAtom)
+	const [autoRefresh, setAutoRefresh] = useAtom(autoRefreshAtom)
+	const [filterMode, setFilterMode] = useAtom(filterModeAtom)
+	const [filterText, setFilterText] = useAtom(filterTextAtom)
 
 	const pendingGRef = useRef(false)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -57,9 +63,9 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
 
-	const stateRef = useRef({ traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, ...params })
+	const stateRef = useRef({ traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, ...params })
 	useEffect(() => {
-		stateRef.current = { traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, ...params }
+		stateRef.current = { traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, ...params }
 	})
 
 	const clearPendingG = () => {
@@ -166,6 +172,29 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	useKeyboard((key) => {
 		const s = $()
+
+		// Filter mode: capture text input
+		if (s.filterMode) {
+			if (key.name === "escape") {
+				setFilterMode(false)
+				setFilterText("")
+				return
+			}
+			if (key.name === "return" || key.name === "enter") {
+				setFilterMode(false)
+				return
+			}
+			if (key.name === "backspace") {
+				setFilterText(s.filterText.slice(0, -1))
+				return
+			}
+			// Single printable character
+			if (key.name.length === 1 && !key.ctrl && !key.meta) {
+				setFilterText(s.filterText + key.name)
+				return
+			}
+			return
+		}
 		const plainG = key.name === "g" && !key.ctrl && !key.meta && !key.option && !key.shift
 		const shiftedG = key.name === "g" && key.shift
 		const questionMark = key.name === "?" || (key.name === "/" && key.shift)
@@ -269,6 +298,15 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		}
 		if (key.name === "r") {
 			refresh("Refreshing traces...")
+			return
+		}
+		if (key.name === "a") {
+			setAutoRefresh(!s.autoRefresh)
+			s.flashNotice(s.autoRefresh ? "Auto-refresh paused" : "Auto-refresh resumed")
+			return
+		}
+		if (key.name === "/" && !key.shift) {
+			setFilterMode(true)
 			return
 		}
 		if (key.name === "tab") {
