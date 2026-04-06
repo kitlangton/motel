@@ -87,6 +87,9 @@ export const showHelpAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const autoRefreshAtom = Atom.make(true).pipe(Atom.keepAlive)
 export const filterModeAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterTextAtom = Atom.make("").pipe(Atom.keepAlive)
+
+export type TraceSortMode = "recent" | "slowest" | "fastest" | "errors"
+export const traceSortAtom = Atom.make<TraceSortMode>("recent").pipe(Atom.keepAlive)
 export const collapsedSpanIdsAtom = Atom.make(new Set<string>() as ReadonlySet<string>).pipe(Atom.keepAlive)
 
 export const loadTraceServices = () => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listServices))

@@ -77,6 +77,7 @@ export const FooterHints = ({ spanNavActive, detailView, autoRefresh, width }: {
 		detailView === "service-logs" ? "enter trace" : `enter ${spanNavActive && detailView === "waterfall" ? "detail" : "spans"}`,
 		spanNavActive ? `esc ${detailView === "span-detail" ? "back" : "traces"}` : null,
 		"/ filter",
+		"s sort",
 		`a live:${autoRefresh ? "on" : "off"}`,
 		"tab logs",
 		"[/] svc",

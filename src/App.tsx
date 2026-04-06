@@ -12,6 +12,7 @@ import {
 	detailViewAtom,
 	filterModeAtom,
 	filterTextAtom,
+	traceSortAtom,
 	initialLogState,
 	initialServiceLogState,
 	loadRecentTraces,
@@ -53,6 +54,7 @@ export const App = () => {
 	const [autoRefresh] = useAtom(autoRefreshAtom)
 	const [filterMode] = useAtom(filterModeAtom)
 	const [filterText] = useAtom(filterTextAtom)
+	const [traceSort] = useAtom(traceSortAtom)
 
 	// Layout calculations
 	const contentWidth = Math.max(60, width ?? 100)
@@ -324,7 +326,7 @@ export const App = () => {
 	}, [serviceLogState.data.length, setSelectedServiceLogIndex])
 
 	// Apply trace filter
-	const filteredTraces = filterText
+	const preFilterTraces = filterText
 		? traceState.data.filter((trace) => {
 			const needle = filterText.toLowerCase()
 			const errorOnly = needle.includes(":error")
@@ -334,6 +336,16 @@ export const App = () => {
 			return true
 		})
 		: traceState.data
+
+	// Apply sort (default is recent, which is the server's order)
+	const filteredTraces = traceSort === "recent"
+		? preFilterTraces
+		: [...preFilterTraces].sort((a, b) => {
+			if (traceSort === "slowest") return b.durationMs - a.durationMs
+			if (traceSort === "fastest") return a.durationMs - b.durationMs
+			if (traceSort === "errors") return b.errorCount - a.errorCount || b.startedAt.getTime() - a.startedAt.getTime()
+			return 0
+		})
 
 	// Keyboard navigation
 	const { spanNavActive } = useKeyboardNav({
@@ -379,6 +391,7 @@ export const App = () => {
 		selectedService: selectedTraceService,
 		focused: !spanNavActive,
 		filterText: filterText || undefined,
+		sortMode: traceSort,
 		totalCount: filterText ? traceState.data.length : undefined,
 		onSelectTrace: selectTraceById,
 	} as const

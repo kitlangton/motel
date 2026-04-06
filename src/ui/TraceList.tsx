@@ -53,6 +53,7 @@ export const TraceList = ({
 	selectedService,
 	focused = true,
 	filterText,
+	sortMode,
 	totalCount,
 	onSelectTrace,
 }: {
@@ -66,15 +67,17 @@ export const TraceList = ({
 	selectedService: string | null
 	focused?: boolean
 	filterText?: string
+	sortMode?: string
 	totalCount?: number
 	onSelectTrace: (traceId: string) => void
 }) => {
 	if (showHeader) {
 		const filterLabel = filterText ? ` \u00b7 filter: ${filterText}` : ""
+		const sortLabel = sortMode && sortMode !== "recent" ? ` \u00b7 sort: ${sortMode}` : ""
 		const countLabel = totalCount !== undefined && totalCount !== traces.length ? ` (${traces.length}/${totalCount})` : ` (${traces.length})`
 		return (
 			<AlignedHeaderLine
-				left={`${focused ? "\u25b8 " : "  "}LOCAL TRACES${countLabel}${filterLabel}`}
+				left={`${focused ? "\u25b8 " : "  "}LOCAL TRACES${countLabel}${filterLabel}${sortLabel}`}
 				right={`${selectedService ?? "waiting for traces"} \u00b7 ${services.length} svc`}
 				width={contentWidth}
 			/>

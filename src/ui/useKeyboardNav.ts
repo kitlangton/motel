@@ -17,6 +17,8 @@ import {
 	selectedTraceServiceAtom,
 	serviceLogStateAtom,
 	showHelpAtom,
+	traceSortAtom,
+	type TraceSortMode,
 	traceStateAtom,
 } from "./state.ts"
 import { G_PREFIX_TIMEOUT_MS } from "./theme.ts"
@@ -57,6 +59,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [autoRefresh, setAutoRefresh] = useAtom(autoRefreshAtom)
 	const [filterMode, setFilterMode] = useAtom(filterModeAtom)
 	const [filterText, setFilterText] = useAtom(filterTextAtom)
+	const [traceSort, setTraceSort] = useAtom(traceSortAtom)
 
 	const pendingGRef = useRef(false)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,9 +67,9 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
 
-	const stateRef = useRef({ traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, ...params })
+	const stateRef = useRef({ traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params })
 	useEffect(() => {
-		stateRef.current = { traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, ...params }
+		stateRef.current = { traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params }
 	})
 
 	const clearPendingG = () => {
@@ -324,6 +327,13 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		if (key.name === "a") {
 			setAutoRefresh(!s.autoRefresh)
 			s.flashNotice(s.autoRefresh ? "Auto-refresh paused" : "Auto-refresh resumed")
+			return
+		}
+		if (key.name === "s") {
+			const modes: readonly TraceSortMode[] = ["recent", "slowest", "fastest", "errors"]
+			const nextMode = modes[(modes.indexOf(s.traceSort) + 1) % modes.length] ?? "recent"
+			setTraceSort(nextMode)
+			s.flashNotice(`Sort: ${nextMode}`)
 			return
 		}
 		if (key.name === "/" && !key.shift) {
