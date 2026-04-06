@@ -32,18 +32,12 @@ export const LogQueryServiceLive = Layer.effect(
 			return logs
 		})
 
-		const searchLogs = Effect.fn("leto/LogQueryService.searchLogs")(function* (input: { readonly serviceName?: string; readonly traceId?: string; readonly spanId?: string; readonly body?: string; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) {
-			return yield* store.searchLogs(input)
+		return LogQueryService.of({
+			listRecentLogs,
+			listTraceLogs,
+			searchLogs: store.searchLogs,
+			logStats: store.logStats,
+			listFacets: store.listFacets,
 		})
-
-		const logStats = Effect.fn("leto/LogQueryService.logStats")(function* (input: { readonly groupBy: string; readonly agg: "count"; readonly serviceName?: string | null; readonly traceId?: string | null; readonly spanId?: string | null; readonly body?: string | null; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) {
-			return yield* store.logStats(input)
-		})
-
-		const listFacets = Effect.fn("leto/LogQueryService.listFacets")(function* (input: { readonly type: "traces" | "logs"; readonly field: string; readonly serviceName?: string | null; readonly lookbackMinutes?: number; readonly limit?: number }) {
-			return yield* store.listFacets(input)
-		})
-
-		return LogQueryService.of({ listRecentLogs, listTraceLogs, searchLogs, logStats, listFacets })
 	}),
 )

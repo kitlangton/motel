@@ -118,7 +118,7 @@ export const TraceDetailsPane = ({
 				</>
 			) : (
 				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-					<PlainLine text="Select a trace with up/down." fg={colors.muted} />
+					<PlainLine text="No trace selected. Use j/k in the trace list." fg={colors.muted} />
 					{Array.from({ length: bodyLines + 2 }, (_, index) => (
 						<BlankRow key={index} />
 					))}

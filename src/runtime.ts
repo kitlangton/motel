@@ -32,8 +32,7 @@ const telemetryLayer = NodeSdk.layer(() => ({
 
 const QueryServicesLive = Layer.mergeAll(TraceQueryServiceLive, LogQueryServiceLive).pipe(Layer.provideMerge(TelemetryStoreLive))
 
-const AppRuntimeLive = config.otel.enabled ? Layer.mergeAll(QueryServicesLive, telemetryLayer) : QueryServicesLive
+const QueryRuntimeLive = config.otel.enabled ? Layer.mergeAll(QueryServicesLive, telemetryLayer) : QueryServicesLive
 
-export const runtime = ManagedRuntime.make(AppRuntimeLive)
-export const queryRuntime = ManagedRuntime.make(QueryServicesLive)
+export const queryRuntime = ManagedRuntime.make(QueryRuntimeLive)
 export const storeRuntime = ManagedRuntime.make(TelemetryStoreLive)

@@ -681,7 +681,7 @@ export const TelemetryStoreLive = Layer.effect(
 		})
 
 		const searchLogs = Effect.fn("leto/TelemetryStore.searchLogs")(function* (input: LogSearch) {
-
+			const now = yield* Clock.currentTimeMillis
 			return yield* Effect.sync(() => {
 				const clauses: string[] = []
 				const params: Array<string | number> = []
@@ -703,7 +703,7 @@ export const TelemetryStoreLive = Layer.effect(
 					params.push(`%${input.body}%`)
 				}
 				if (input.lookbackMinutes) {
-					const cutoff = Date.now() - input.lookbackMinutes * 60 * 1000
+					const cutoff = now - input.lookbackMinutes * 60 * 1000
 					clauses.push(`timestamp_ms >= ?`)
 					params.push(cutoff)
 				}

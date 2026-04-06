@@ -71,16 +71,16 @@ export const FilterBar = ({ text, width }: { text: string; width: number }) => (
 	</TextLine>
 )
 
-export const FooterHints = ({ spanNavActive, detailView, width }: { spanNavActive: boolean; detailView: DetailView; width: number }) => {
-	const firstLine = "j/k move  ^n/^p trace  ^d/^u page  gg/G top/end"
+export const FooterHints = ({ spanNavActive, detailView, autoRefresh, width }: { spanNavActive: boolean; detailView: DetailView; autoRefresh: boolean; width: number }) => {
+	const firstLine = "j/k move  ^n/^p traces  ^d/^u page"
 	const secondLine = [
 		detailView === "service-logs" ? "enter trace" : `enter ${spanNavActive && detailView === "waterfall" ? "detail" : "spans"}`,
 		spanNavActive ? `esc ${detailView === "span-detail" ? "back" : "traces"}` : null,
 		"/ filter",
-		"a live",
+		`a live:${autoRefresh ? "on" : "off"}`,
 		"tab logs",
-		"[ ] svc",
-		"r ref",
+		"[/] svc",
+		"r refresh",
 		"o open",
 		"q quit",
 	]

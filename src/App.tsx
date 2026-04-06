@@ -448,7 +448,7 @@ export const App = () => {
 						{visibleFooterNotice ? (
 							<PlainLine text={visibleFooterNotice} fg={colors.count} />
 						) : (
-							<FooterHints spanNavActive={spanNavActive} detailView={detailView} width={headerFooterWidth} />
+							<FooterHints spanNavActive={spanNavActive} detailView={detailView} autoRefresh={autoRefresh} width={headerFooterWidth} />
 						)}
 					</box>
 				</>

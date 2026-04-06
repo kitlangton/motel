@@ -1,5 +1,5 @@
 import { Effect, Layer, ServiceMap } from "effect"
-import type { TraceItem } from "../domain.js"
+import type { SpanItem, TraceItem } from "../domain.js"
 import { TelemetryStore } from "./TelemetryStore.js"
 
 export class TraceQueryService extends ServiceMap.Service<
@@ -7,9 +7,12 @@ export class TraceQueryService extends ServiceMap.Service<
 	{
 		readonly listServices: Effect.Effect<readonly string[], Error>
 		readonly listRecentTraces: (serviceName: string, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceItem[], Error>
-		readonly searchTraces: (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceItem[], Error>
+		readonly searchTraces: (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly TraceItem[], Error>
 		readonly traceStats: (input: { readonly groupBy: string; readonly agg: "count" | "avg_duration" | "p95_duration" | "error_rate"; readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly { readonly group: string; readonly value: number; readonly count: number }[], Error>
 		readonly getTrace: (traceId: string) => Effect.Effect<TraceItem | null, Error>
+		readonly getSpan: (spanId: string) => Effect.Effect<SpanItem | null, Error>
+		readonly listTraceSpans: (traceId: string) => Effect.Effect<readonly SpanItem[], Error>
+		readonly searchSpans: (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly parentOperation?: string | null; readonly status?: "ok" | "error" | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly SpanItem[], Error>
 	}
 >()("leto/TraceQueryService") {}
 
@@ -33,19 +36,25 @@ export const TraceQueryServiceLive = Layer.effect(
 			return traces
 		})
 
-		const searchTraces = Effect.fn("leto/TraceQueryService.searchTraces")(function* (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number }) {
-			return yield* store.searchTraces(input)
-		})
-
-		const traceStats = Effect.fn("leto/TraceQueryService.traceStats")(function* (input: { readonly groupBy: string; readonly agg: "count" | "avg_duration" | "p95_duration" | "error_rate"; readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) {
-			return yield* store.traceStats(input)
-		})
-
 		const getTrace = Effect.fn("leto/TraceQueryService.getTrace")(function* (traceId: string) {
 			yield* Effect.annotateCurrentSpan("trace.trace_id", traceId)
 			return yield* store.getTrace(traceId)
 		})
 
-		return TraceQueryService.of({ listServices, listRecentTraces, searchTraces, traceStats, getTrace })
+		const getSpan = Effect.fn("leto/TraceQueryService.getSpan")(function* (spanId: string) {
+			yield* Effect.annotateCurrentSpan("trace.span_id", spanId)
+			return yield* store.getSpan(spanId)
+		})
+
+		return TraceQueryService.of({
+			listServices,
+			listRecentTraces,
+			searchTraces: store.searchTraces,
+			traceStats: store.traceStats,
+			getTrace,
+			getSpan,
+			listTraceSpans: store.listTraceSpans,
+			searchSpans: store.searchSpans,
+		})
 	}),
 )

@@ -83,10 +83,10 @@ export const TraceList = ({
 
 	return (
 		<box flexDirection="column">
-			{status === "loading" && traces.length === 0 ? <PlainLine text="- Loading traces..." fg={colors.muted} /> : null}
-			{status === "error" ? <PlainLine text={`- ${error ?? "Could not load traces."}`} fg={colors.error} /> : null}
-			{status === "ready" && services.length === 0 ? <PlainLine text="- No services yet. Start leto or emit local spans, then refresh." fg={colors.muted} /> : null}
-			{status === "ready" && selectedService && traces.length === 0 ? <PlainLine text="- No traces for the selected service in the current lookback window." fg={colors.muted} /> : null}
+			{status === "loading" && traces.length === 0 ? <PlainLine text="Loading traces..." fg={colors.muted} /> : null}
+			{status === "error" ? <PlainLine text={error ?? "Could not load traces."} fg={colors.error} /> : null}
+			{status === "ready" && services.length === 0 ? <PlainLine text="No services reporting yet. Start your app and emit a span." fg={colors.muted} /> : null}
+			{status === "ready" && selectedService && traces.length === 0 ? <PlainLine text="No traces in the current lookback window." fg={colors.muted} /> : null}
 			{traces.map((trace) => (
 				<TraceRow
 					key={trace.traceId}
