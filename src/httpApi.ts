@@ -116,6 +116,71 @@ const LogList = Schema.Struct({ data: Schema.Array(Log), meta: Meta })
 const FacetList = Schema.Struct({ data: Schema.Array(Facet) })
 const StatList = Schema.Struct({ data: Schema.Array(Stat) })
 
+// AI Call schemas (imported from domain for the canonical types)
+const AiUsageSchema = Schema.Struct({
+	inputTokens: Schema.NullOr(Schema.Number),
+	outputTokens: Schema.NullOr(Schema.Number),
+	totalTokens: Schema.NullOr(Schema.Number),
+	cachedInputTokens: Schema.NullOr(Schema.Number),
+	reasoningTokens: Schema.NullOr(Schema.Number),
+}).annotate({ identifier: "AiUsage" })
+
+const AiCallSummarySchema = Schema.Struct({
+	traceId: Schema.String,
+	spanId: Schema.String,
+	operation: Schema.String.pipe(Schema.annotateKey({ description: "AI operation: streamText, generateText, streamObject, etc." })),
+	service: Schema.String,
+	functionId: Schema.NullOr(Schema.String),
+	provider: Schema.NullOr(Schema.String),
+	model: Schema.NullOr(Schema.String),
+	status: Schema.Literals(["ok", "error"]),
+	startedAt: Schema.String,
+	durationMs: Schema.Number,
+	sessionId: Schema.NullOr(Schema.String),
+	userId: Schema.NullOr(Schema.String),
+	promptPreview: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "First ~200 chars of prompt content" })),
+	responsePreview: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "First ~200 chars of response text" })),
+	finishReason: Schema.NullOr(Schema.String),
+	toolCallCount: Schema.Number,
+	usage: Schema.NullOr(AiUsageSchema),
+}).annotate({ identifier: "AiCallSummary" })
+
+const AiCallDetailSchema = Schema.Struct({
+	traceId: Schema.String,
+	spanId: Schema.String,
+	operation: Schema.String,
+	service: Schema.String,
+	functionId: Schema.NullOr(Schema.String),
+	provider: Schema.NullOr(Schema.String),
+	model: Schema.NullOr(Schema.String),
+	status: Schema.Literals(["ok", "error"]),
+	startedAt: Schema.String,
+	durationMs: Schema.Number,
+	sessionId: Schema.NullOr(Schema.String),
+	userId: Schema.NullOr(Schema.String),
+	finishReason: Schema.NullOr(Schema.String),
+	promptMessages: Schema.NullOr(Schema.Unknown),
+	responseText: Schema.NullOr(Schema.String),
+	toolCalls: Schema.Array(Schema.Struct({
+		name: Schema.String,
+		spanId: Schema.NullOr(Schema.String),
+		status: Schema.Literals(["ok", "error"]),
+		durationMs: Schema.NullOr(Schema.Number),
+	})),
+	toolsAvailable: Schema.NullOr(Schema.Unknown),
+	providerMetadata: Schema.NullOr(Schema.Unknown),
+	usage: Schema.NullOr(AiUsageSchema),
+	timing: Schema.Struct({
+		msToFirstChunk: Schema.NullOr(Schema.Number),
+		msToFinish: Schema.NullOr(Schema.Number),
+		avgOutputTokensPerSecond: Schema.NullOr(Schema.Number),
+	}),
+	logs: Schema.Array(Schema.Unknown),
+}).annotate({ identifier: "AiCallDetail" })
+
+const AiCallList = Schema.Struct({ data: Schema.Array(AiCallSummarySchema), meta: Meta })
+const AiCallDetailResponse = Schema.Struct({ data: AiCallDetailSchema })
+
 // Shared query parameter schemas
 const LookbackParam = Schema.optionalKey(Schema.String).pipe(
 	Schema.annotateKey({ description: "Time window to look back. Examples: 30m, 1h, 6h, 1d. Default: 90m" }),
@@ -388,6 +453,63 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 				})
 					.annotate(OpenApi.Summary, "Get facet value counts")
 					.annotate(OpenApi.Description, "Returns distinct values and their counts for a given field, useful for discovering what data exists before querying. For example: ?type=logs&field=severity returns the distribution of log levels."),
+
+				// AI Call endpoints
+				HttpApiEndpoint.get("aiCalls", "/api/ai/calls", {
+					query: {
+						service: ServiceParam,
+						traceId: Schema.optionalKey(Schema.String),
+						sessionId: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by ai.telemetry.metadata.sessionId" })),
+						functionId: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by ai.telemetry.functionId" })),
+						provider: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by ai.model.provider (e.g. openai.responses)" })),
+						model: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by ai.model.id (e.g. gpt-5.4)" })),
+						operation: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by AI operation: streamText, generateText, streamObject, etc." })),
+						status: Schema.optionalKey(Schema.Literals(["ok", "error"])),
+						minDurationMs: Schema.optionalKey(Schema.Number),
+						text: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Case-insensitive substring search across prompt, response, and tool content" })),
+						lookback: LookbackParam,
+						limit: LimitParam,
+					},
+					success: AiCallList,
+				})
+					.annotate(OpenApi.Summary, "Search AI calls")
+					.annotate(OpenApi.Description, "Search AI SDK calls (streamText, generateText, etc.) with normalized fields. Returns compact summaries with previews — use /api/ai/calls/{spanId} for full prompt/response payloads. Supports filtering by service, session, model, provider, function, operation, status, duration, and free-text search across prompt/response content."),
+
+				HttpApiEndpoint.get("aiCall", "/api/ai/calls/:spanId", {
+					params: {
+						spanId: Schema.String.pipe(Schema.annotateKey({ description: "The span ID of the AI call" })),
+					},
+					success: AiCallDetailResponse,
+					error: ErrorResponse,
+				})
+					.annotate(OpenApi.Summary, "Get AI call detail")
+					.annotate(OpenApi.Description, "Returns the full detail of a single AI call including complete prompt messages, response text, tool calls with args, token usage, timing, provider metadata, and correlated logs."),
+
+				HttpApiEndpoint.get("aiStats", "/api/ai/stats", {
+					query: {
+						groupBy: Schema.Literals(["provider", "model", "functionId", "sessionId", "status"]).pipe(
+							Schema.annotateKey({ description: "Group results by this field" }),
+						),
+						agg: Schema.Literals(["count", "avg_duration", "p95_duration", "total_input_tokens", "total_output_tokens"]).pipe(
+							Schema.annotateKey({ description: "Aggregation function" }),
+						),
+						service: ServiceParam,
+						traceId: Schema.optionalKey(Schema.String),
+						sessionId: Schema.optionalKey(Schema.String),
+						functionId: Schema.optionalKey(Schema.String),
+						provider: Schema.optionalKey(Schema.String),
+						model: Schema.optionalKey(Schema.String),
+						operation: Schema.optionalKey(Schema.String),
+						status: Schema.optionalKey(Schema.Literals(["ok", "error"])),
+						minDurationMs: Schema.optionalKey(Schema.Number),
+						lookback: LookbackParam,
+						limit: LimitParam,
+					},
+					success: StatList,
+					error: ErrorResponse,
+				})
+					.annotate(OpenApi.Summary, "Aggregate AI call statistics")
+					.annotate(OpenApi.Description, "Returns grouped statistics for AI calls. Supports grouping by provider, model, functionId, sessionId, or status with aggregations: count, avg_duration, p95_duration, total_input_tokens, total_output_tokens."),
 			)
 	)
 

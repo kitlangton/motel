@@ -125,8 +125,78 @@ describe("motel telemetry store", () => {
 							],
 						},
 					],
-					}),
-				),
+				}),
+			).pipe(Effect.flatMap(() => Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.ingestTraces({
+					resourceSpans: [{
+						resource: { attributes: [{ key: "service.name", value: { stringValue: "test-api" } }] },
+						scopeSpans: [{
+							scope: { name: "ai" },
+							spans: [
+								{
+									traceId: "trace-ai",
+									spanId: "ai-stream-1",
+									name: "ai.streamText",
+									kind: 1,
+									startTimeUnixNano: String(nowNanos + 20n * oneSecond),
+									endTimeUnixNano: String(nowNanos + 40n * oneSecond),
+									attributes: [
+										{ key: "ai.operationId", value: { stringValue: "ai.streamText" } },
+										{ key: "ai.telemetry.functionId", value: { stringValue: "session.llm" } },
+										{ key: "ai.model.provider", value: { stringValue: "openai.responses" } },
+										{ key: "ai.model.id", value: { stringValue: "gpt-5.4" } },
+										{ key: "ai.telemetry.metadata.sessionId", value: { stringValue: "ses_test123" } },
+										{ key: "ai.telemetry.metadata.userId", value: { stringValue: "kit" } },
+										{ key: "ai.prompt.messages", value: { stringValue: '[{"role":"user","content":"Tell me a joke about programming"}]' } },
+										{ key: "ai.response.text", value: { stringValue: "Why do programmers prefer dark mode? Because light attracts bugs!" } },
+										{ key: "ai.response.finishReason", value: { stringValue: "stop" } },
+										{ key: "ai.usage.inputTokens", value: { stringValue: "150" } },
+										{ key: "ai.usage.outputTokens", value: { stringValue: "42" } },
+										{ key: "ai.usage.totalTokens", value: { stringValue: "192" } },
+										{ key: "ai.usage.cachedInputTokens", value: { stringValue: "100" } },
+										{ key: "ai.response.msToFirstChunk", value: { stringValue: "500.5" } },
+										{ key: "ai.response.msToFinish", value: { stringValue: "20000" } },
+									],
+								},
+								{
+									traceId: "trace-ai",
+									spanId: "ai-tool-1",
+									parentSpanId: "ai-stream-1",
+									name: "ai.toolCall",
+									kind: 1,
+									startTimeUnixNano: String(nowNanos + 25n * oneSecond),
+									endTimeUnixNano: String(nowNanos + 26n * oneSecond),
+									attributes: [
+										{ key: "ai.toolCall.name", value: { stringValue: "bash" } },
+									],
+								},
+								{
+									traceId: "trace-ai",
+									spanId: "ai-stream-2",
+									name: "ai.generateText",
+									kind: 1,
+									startTimeUnixNano: String(nowNanos + 50n * oneSecond),
+									endTimeUnixNano: String(nowNanos + 55n * oneSecond),
+									status: { code: 2 },
+									attributes: [
+										{ key: "ai.operationId", value: { stringValue: "ai.generateText" } },
+										{ key: "ai.telemetry.functionId", value: { stringValue: "session.llm" } },
+										{ key: "ai.model.provider", value: { stringValue: "anthropic" } },
+										{ key: "ai.model.id", value: { stringValue: "claude-opus-4" } },
+										{ key: "ai.telemetry.metadata.sessionId", value: { stringValue: "ses_test456" } },
+										{ key: "ai.prompt.messages", value: { stringValue: '[{"role":"user","content":"Summarize this"}]' } },
+										{ key: "ai.response.text", value: { stringValue: "Error: rate limited" } },
+										{ key: "ai.response.finishReason", value: { stringValue: "error" } },
+										{ key: "ai.usage.inputTokens", value: { stringValue: "80" } },
+										{ key: "ai.usage.outputTokens", value: { stringValue: "10" } },
+										{ key: "ai.usage.totalTokens", value: { stringValue: "90" } },
+									],
+								},
+							],
+						}],
+					}],
+				}),
+			))),
 		)
 
 		await storeRuntime.runPromise(ingest.pipe(Effect.provideService(References.MinimumLogLevel, "None")))
@@ -225,10 +295,11 @@ describe("motel telemetry store", () => {
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
-		expect(result).toHaveLength(1)
-		expect(result[0]?.group).toBe("SessionProcessor.stream")
-		expect(result[0]?.count).toBe(2)
-		expect(result[0]?.value).toBe(3000)
+		expect(result.length).toBeGreaterThanOrEqual(1)
+		const sessionOp = result.find((r) => r.group === "SessionProcessor.stream")
+		expect(sessionOp).toBeDefined()
+		expect(sessionOp?.count).toBe(2)
+		expect(sessionOp?.value).toBe(3000)
 	})
 
 	it("aggregates log stats by severity", async () => {
@@ -264,15 +335,15 @@ describe("motel telemetry store", () => {
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
-		expect(result).toHaveLength(2)
-		// Ordered by start time descending
-		expect(result[0]?.traceId).toBe("trace-2")
-		expect(result[1]?.traceId).toBe("trace-1")
-		// Summary fields are correct
-		expect(result[1]?.serviceName).toBe("test-api")
-		expect(result[1]?.rootOperationName).toBe("SessionProcessor.stream")
-		expect(result[1]?.spanCount).toBe(2)
-		expect(result[1]?.durationMs).toBe(4000)
+		expect(result).toHaveLength(3) // trace-1, trace-2, trace-ai
+		// Ordered by start time descending — trace-ai is most recent
+		expect(result[0]?.traceId).toBe("trace-ai")
+		// Summary fields are correct for the original trace
+		const trace1 = result.find((r) => r.traceId === "trace-1")
+		expect(trace1?.serviceName).toBe("test-api")
+		expect(trace1?.rootOperationName).toBe("SessionProcessor.stream")
+		expect(trace1?.spanCount).toBe(2)
+		expect(trace1?.durationMs).toBe(4000)
 	})
 
 	it("lists trace summaries filtered by service", async () => {
@@ -282,7 +353,7 @@ describe("motel telemetry store", () => {
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
-		expect(result).toHaveLength(2)
+		expect(result).toHaveLength(3) // all traces are test-api
 	})
 
 	it("searches trace summaries with status filter", async () => {
@@ -295,9 +366,8 @@ describe("motel telemetry store", () => {
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
-		expect(result).toHaveLength(1)
-		expect(result[0]?.traceId).toBe("trace-2")
-		expect(result[0]?.errorCount).toBeGreaterThan(0)
+		expect(result).toHaveLength(2) // trace-2 and trace-ai (ai.generateText has error status)
+		expect(result.some((r) => r.traceId === "trace-2")).toBe(true)
 	})
 
 	it("searches trace summaries with attribute filters", async () => {
@@ -439,7 +509,7 @@ describe("motel telemetry store", () => {
 		expect(result).toHaveLength(2)
 		const errorFacet = result.find((r) => r.value === "error")
 		const okFacet = result.find((r) => r.value === "ok")
-		expect(errorFacet?.count).toBe(1)
+		expect(errorFacet?.count).toBe(2) // trace-2 and trace-ai
 		expect(okFacet?.count).toBe(1)
 	})
 
@@ -473,7 +543,7 @@ describe("motel telemetry store", () => {
 		expect(result).toHaveLength(2)
 		const errorGroup = result.find((r) => r.group === "error")
 		const okGroup = result.find((r) => r.group === "ok")
-		expect(errorGroup?.count).toBe(1)
+		expect(errorGroup?.count).toBe(2) // trace-2 and trace-ai
 		expect(okGroup?.count).toBe(1)
 	})
 
@@ -490,7 +560,8 @@ describe("motel telemetry store", () => {
 
 		expect(result).toHaveLength(1)
 		expect(result[0]?.group).toBe("test-api")
-		expect(result[0]?.value).toBe(0.5) // 1 error trace out of 2
+		// 2 error traces out of 3 total
+		expect(result[0]?.value).toBeCloseTo(2 / 3, 5)
 	})
 
 	it("documents the docs routes in OpenAPI", () => {
@@ -519,5 +590,137 @@ describe("motel telemetry store", () => {
 		const mixed = ["attr.key=exact", "attrContains.key=substring"]
 		expect(attributeFiltersFromArgs(mixed)).toEqual({ key: "exact" })
 		expect(attributeContainsFiltersFromArgs(mixed)).toEqual({ key: "substring" })
+	})
+
+	// AI Call tests
+
+	it("searches AI calls and returns compact summaries", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({}),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(3) // ai.streamText, ai.toolCall, ai.generateText
+		const streamCall = result.find((c) => c.spanId === "ai-stream-1")
+		expect(streamCall).toBeDefined()
+		expect(streamCall?.operation).toBe("streamText")
+		expect(streamCall?.model).toBe("gpt-5.4")
+		expect(streamCall?.provider).toBe("openai.responses")
+		expect(streamCall?.sessionId).toBe("ses_test123")
+		expect(streamCall?.userId).toBe("kit")
+		expect(streamCall?.finishReason).toBe("stop")
+		expect(streamCall?.promptPreview).toContain("Tell me a joke")
+		expect(streamCall?.responsePreview).toContain("dark mode")
+		expect(streamCall?.toolCallCount).toBe(1)
+		expect(streamCall?.usage?.inputTokens).toBe(150)
+		expect(streamCall?.usage?.outputTokens).toBe(42)
+	})
+
+	it("filters AI calls by model", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ model: "claude-opus-4" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]?.model).toBe("claude-opus-4")
+		expect(result[0]?.status).toBe("error")
+	})
+
+	it("filters AI calls by sessionId", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ sessionId: "ses_test123" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]?.spanId).toBe("ai-stream-1")
+	})
+
+	it("searches AI calls by text content", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ text: "joke about programming" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]?.spanId).toBe("ai-stream-1")
+	})
+
+	it("filters AI calls by operation type", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ operation: "generateText" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]?.operation).toBe("generateText")
+	})
+
+	it("gets AI call detail with full payloads", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.getAiCall("ai-stream-1"),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).not.toBeNull()
+		expect(result?.model).toBe("gpt-5.4")
+		expect(result?.promptMessages).toBeDefined()
+		expect(result?.responseText).toContain("dark mode")
+		expect(result?.toolCalls).toHaveLength(1)
+		expect(result?.toolCalls[0]?.name).toBe("bash")
+		expect(result?.usage?.inputTokens).toBe(150)
+		expect(result?.timing.msToFirstChunk).toBe(500.5)
+		expect(result?.timing.msToFinish).toBe(20000)
+	})
+
+	it("returns null for non-AI span in getAiCall", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.getAiCall("root-1"),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toBeNull()
+	})
+
+	it("aggregates AI call stats by model", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.aiCallStats({ groupBy: "model", agg: "count" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result.length).toBeGreaterThanOrEqual(2)
+		const gpt = result.find((r) => r.group === "gpt-5.4")
+		const claude = result.find((r) => r.group === "claude-opus-4")
+		expect(gpt?.count).toBeGreaterThanOrEqual(1)
+		expect(claude?.count).toBe(1)
+	})
+
+	it("aggregates AI call stats by status", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.aiCallStats({ groupBy: "status", agg: "count" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		const okGroup = result.find((r) => r.group === "ok")
+		const errorGroup = result.find((r) => r.group === "error")
+		expect(okGroup).toBeDefined()
+		expect(errorGroup).toBeDefined()
+		expect(errorGroup?.count).toBe(1)
+	})
+
+	it("documents the AI routes in OpenAPI", () => {
+		expect(motelOpenApiSpec.paths["/api/ai/calls"]).toBeDefined()
+		expect(motelOpenApiSpec.paths["/api/ai/calls/{spanId}"]).toBeDefined()
+		expect(motelOpenApiSpec.paths["/api/ai/stats"]).toBeDefined()
 	})
 })

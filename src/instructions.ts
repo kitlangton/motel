@@ -24,6 +24,9 @@ Query endpoints:
 - Logs: GET ${config.otel.queryUrl}/api/logs
 - Log search: GET ${config.otel.queryUrl}/api/logs/search
 - Log stats: GET ${config.otel.queryUrl}/api/logs/stats
+- AI calls: GET ${config.otel.queryUrl}/api/ai/calls
+- AI call detail: GET ${config.otel.queryUrl}/api/ai/calls/<span-id>
+- AI stats: GET ${config.otel.queryUrl}/api/ai/stats
 - Facets: GET ${config.otel.queryUrl}/api/facets?type=logs&field=severity
 - OpenAPI: GET ${config.otel.queryUrl}/openapi.json
 - Docs: GET ${config.otel.queryUrl}/api/docs

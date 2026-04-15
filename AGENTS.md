@@ -31,6 +31,9 @@
 - `/api/traces` and `/api/traces/search` return summaries by default. Use `/api/traces/<trace-id>` for the full trace tree.
 - `/api/logs` and `/api/logs/search` support `severity` (e.g. `?severity=ERROR`), case-insensitive body search, and `attrContains.<key>=<substring>` for substring search inside attribute values.
 - `/api/spans/search` supports `traceId` to scope to one trace, `attr.<key>=<value>` for exact match, and `attrContains.<key>=<substring>` for case-insensitive substring search inside attribute values.
+- `/api/ai/calls` searches AI SDK calls (streamText, generateText, etc.) with first-class filters for `model`, `provider`, `sessionId`, `functionId`, `operation`, `status`, `text` (cross-field search), and returns compact summaries with previews and token usage.
+- `/api/ai/calls/<span-id>` returns the full detail of a single AI call including complete prompt messages, response text, tool calls, timing, and correlated logs.
+- `/api/ai/stats` aggregates AI call statistics by `provider`, `model`, `functionId`, `sessionId`, or `status` with aggregations: `count`, `avg_duration`, `p95_duration`, `total_input_tokens`, `total_output_tokens`.
 - `/api/docs` lists available documentation; `/api/docs/debug` and `/api/docs/effect` return the full skill content.
 
 ## Architecture

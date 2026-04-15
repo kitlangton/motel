@@ -148,12 +148,24 @@ curl "http://127.0.0.1:27686/api/spans/search?service=<service>&attrContains.ai.
 curl "http://127.0.0.1:27686/api/logs/search?service=<service>&severity=ERROR&body=<text>"
 curl "http://127.0.0.1:27686/api/logs/search?service=<service>&attrContains.debug.label=<substring>"
 
+# AI call search (compact summaries with previews)
+curl "http://127.0.0.1:27686/api/ai/calls?model=gpt-5.4&sessionId=<session>"
+curl "http://127.0.0.1:27686/api/ai/calls?text=<phrase>&status=error"
+
+# AI call detail (full prompt/response payloads)
+curl "http://127.0.0.1:27686/api/ai/calls/<span-id>"
+
+# AI stats
+curl "http://127.0.0.1:27686/api/ai/stats?groupBy=model&agg=total_input_tokens"
+
 curl http://127.0.0.1:27686/openapi.json
 ```
 
 List and search responses include `meta.nextCursor` when more data is available.
 
 Motel gives you trace-correlated data — you can see which span a debug log belongs to, the parent operation, timing, and the full trace tree. Use `GET /api/traces/<trace-id>/spans` and `GET /api/spans/<span-id>/logs` to navigate the correlation.
+
+For AI/LLM calls, use `/api/ai/calls` for compact searchable summaries (with prompt/response previews and token usage), and `/api/ai/calls/<span-id>` for full payloads.
 
 ## Effect
 

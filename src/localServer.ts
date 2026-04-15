@@ -274,7 +274,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 	(handlers) =>
 		handlers
 			.handleRaw("root", () =>
-				Effect.succeed(textResponse("motel local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/facets?type=logs&field=severity\nGET /api/docs\nGET /api/docs/<name>\nGET /openapi.json\nGET /docs\nGET /trace/<trace-id>\n")),
+				Effect.succeed(textResponse("motel local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/ai/calls\nGET /api/ai/calls/<span-id>\nGET /api/ai/stats\nGET /api/facets?type=logs&field=severity\nGET /api/docs\nGET /api/docs/<name>\nGET /openapi.json\nGET /docs\nGET /trace/<trace-id>\n")),
 			)
 			.handle("health", () =>
 				Effect.succeed({
@@ -504,6 +504,69 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 							serviceName: url.searchParams.get("service"),
 							lookbackMinutes: parseLookbackMinutes(url.searchParams.get("lookback"), config.otel.traceLookbackMinutes),
 							limit: parseLimit(url.searchParams.get("limit"), 20),
+						}),
+					)
+					return jsonResponse({ data })
+				})),
+			)
+			.handleRaw("aiCalls", ({ request }) =>
+				respondRaw(Effect.gen(function*() {
+					const url = requestUrl(request)
+					const limit = parseBoundedLimit(url.searchParams.get("limit"), 20, SPAN_MAX_LIMIT)
+					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
+					const data = yield* withStore((store) =>
+						store.searchAiCalls({
+							service: url.searchParams.get("service"),
+							traceId: url.searchParams.get("traceId"),
+							sessionId: url.searchParams.get("sessionId"),
+							functionId: url.searchParams.get("functionId"),
+							provider: url.searchParams.get("provider"),
+							model: url.searchParams.get("model"),
+							operation: url.searchParams.get("operation"),
+							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
+							minDurationMs: url.searchParams.get("minDurationMs") ? Number(url.searchParams.get("minDurationMs")) : null,
+							text: url.searchParams.get("text"),
+							lookbackMinutes,
+							limit,
+						}),
+					)
+					return jsonResponse({
+						data,
+						meta: listMeta({ limit, lookbackMinutes, returned: data.length, truncated: false, nextCursor: null }),
+					})
+				})),
+			)
+			.handleRaw("aiCall", ({ params }) =>
+				respondRaw(Effect.gen(function*() {
+					const data = yield* withStore((store) => store.getAiCall(params.spanId))
+					if (!data) return notFoundResponse("AI call not found")
+					return jsonResponse({ data })
+				})),
+			)
+			.handleRaw("aiStats", ({ request }) =>
+				respondRaw(Effect.gen(function*() {
+					const url = requestUrl(request)
+					const groupBy = url.searchParams.get("groupBy") as "provider" | "model" | "functionId" | "sessionId" | "status" | null
+					const agg = url.searchParams.get("agg") as "count" | "avg_duration" | "p95_duration" | "total_input_tokens" | "total_output_tokens" | null
+					if (!groupBy || !agg) {
+						return jsonResponse({ error: "Expected groupBy and agg parameters" }, 400)
+					}
+					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
+					const data = yield* withStore((store) =>
+						store.aiCallStats({
+							groupBy,
+							agg,
+							service: url.searchParams.get("service"),
+							traceId: url.searchParams.get("traceId"),
+							sessionId: url.searchParams.get("sessionId"),
+							functionId: url.searchParams.get("functionId"),
+							provider: url.searchParams.get("provider"),
+							model: url.searchParams.get("model"),
+							operation: url.searchParams.get("operation"),
+							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
+							minDurationMs: url.searchParams.get("minDurationMs") ? Number(url.searchParams.get("minDurationMs")) : null,
+							lookbackMinutes,
+							limit: parseBoundedLimit(url.searchParams.get("limit"), 20, SPAN_MAX_LIMIT),
 						}),
 					)
 					return jsonResponse({ data })

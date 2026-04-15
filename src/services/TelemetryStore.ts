@@ -3,7 +3,8 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { Clock, Effect, Layer, Schedule, ServiceMap } from "effect"
 import { config } from "../config.js"
-import type { LogItem, SpanItem, TraceItem, TraceSummaryItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
+import type { AiCallDetail, AiCallSummary, LogItem, SpanItem, TraceItem, TraceSummaryItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
+import { AI_ATTR_MAP, AI_TEXT_SEARCH_KEYS, truncatePreview } from "../domain.js"
 import { attributeMap, nanosToMilliseconds, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
 
 interface SpanRow {
@@ -102,6 +103,37 @@ interface FacetSearch {
 	readonly type: "traces" | "logs"
 	readonly field: string
 	readonly serviceName?: string | null
+	readonly lookbackMinutes?: number
+	readonly limit?: number
+}
+
+interface AiCallSearch {
+	readonly service?: string | null
+	readonly traceId?: string | null
+	readonly sessionId?: string | null
+	readonly functionId?: string | null
+	readonly provider?: string | null
+	readonly model?: string | null
+	readonly operation?: string | null
+	readonly status?: "ok" | "error" | null
+	readonly minDurationMs?: number | null
+	readonly text?: string | null
+	readonly lookbackMinutes?: number
+	readonly limit?: number
+}
+
+interface AiCallStatsSearch {
+	readonly groupBy: "provider" | "model" | "functionId" | "sessionId" | "status"
+	readonly agg: "count" | "avg_duration" | "p95_duration" | "total_input_tokens" | "total_output_tokens"
+	readonly service?: string | null
+	readonly traceId?: string | null
+	readonly sessionId?: string | null
+	readonly functionId?: string | null
+	readonly provider?: string | null
+	readonly model?: string | null
+	readonly operation?: string | null
+	readonly status?: "ok" | "error" | null
+	readonly minDurationMs?: number | null
 	readonly lookbackMinutes?: number
 	readonly limit?: number
 }
@@ -346,6 +378,9 @@ export class TelemetryStore extends ServiceMap.Service<
 		readonly listFacets: (input: FacetSearch) => Effect.Effect<readonly FacetItem[], Error>
 		readonly listRecentLogs: (serviceName: string) => Effect.Effect<readonly LogItem[], Error>
 		readonly listTraceLogs: (traceId: string) => Effect.Effect<readonly LogItem[], Error>
+		readonly searchAiCalls: (input: AiCallSearch) => Effect.Effect<readonly AiCallSummary[], Error>
+		readonly getAiCall: (spanId: string) => Effect.Effect<AiCallDetail | null, Error>
+		readonly aiCallStats: (input: AiCallStatsSearch) => Effect.Effect<readonly StatsItem[], Error>
 	}
 >()("motel/TelemetryStore") {}
 
@@ -1341,6 +1376,367 @@ export const TelemetryStoreLive = Layer.effect(
 			return yield* searchLogs({ traceId, limit: config.otel.logFetchLimit })
 		})
 
+		// ---------------------------------------------------------------------------
+		// AI Call queries
+		// ---------------------------------------------------------------------------
+
+		/** Extracts ai.streamText -> "streamText", ai.streamText.doStream -> "streamText" */
+		const parseAiOperation = (operationName: string): string => {
+			const parts = operationName.replace(/^ai\./, "").split(".")
+			return parts[0] ?? operationName
+		}
+
+		/** Builds WHERE clauses for AI call search against the spans table (aliased as s) */
+		const buildAiWhereClauses = (input: AiCallSearch | AiCallStatsSearch, cutoff: number) => {
+			const clauses: string[] = ["s.operation_name LIKE 'ai.%'", "s.start_time_ms >= ?"]
+			const params: Array<string | number> = [cutoff]
+
+			if (input.service) {
+				clauses.push("s.service_name = ?")
+				params.push(input.service)
+			}
+			if (input.traceId) {
+				clauses.push("s.trace_id = ?")
+				params.push(input.traceId)
+			}
+			if (input.status) {
+				clauses.push("s.status = ?")
+				params.push(input.status)
+			}
+			if (input.minDurationMs != null) {
+				clauses.push("s.duration_ms >= ?")
+				params.push(input.minDurationMs)
+			}
+			if (input.operation) {
+				clauses.push("s.operation_name LIKE ?")
+				params.push(`ai.${input.operation}%`)
+			}
+
+			// Named attribute filters via span_attributes
+			const attrFilters: Array<[string, string]> = []
+			if (input.sessionId) attrFilters.push([AI_ATTR_MAP.sessionId, input.sessionId])
+			if (input.functionId) attrFilters.push([AI_ATTR_MAP.functionId, input.functionId])
+			if (input.provider) attrFilters.push([AI_ATTR_MAP.provider, input.provider])
+			if (input.model) attrFilters.push([AI_ATTR_MAP.model, input.model])
+
+			for (const [key, value] of attrFilters) {
+				clauses.push("EXISTS (SELECT 1 FROM span_attributes WHERE span_attributes.trace_id = s.trace_id AND span_attributes.span_id = s.span_id AND key = ? AND value = ?)")
+				params.push(key, value)
+			}
+
+			// Text search across prompt/response/tool attribute values
+			if ("text" in input && input.text) {
+				const textKeys = AI_TEXT_SEARCH_KEYS.map(() => "?").join(", ")
+				clauses.push(`EXISTS (SELECT 1 FROM span_attributes WHERE span_attributes.trace_id = s.trace_id AND span_attributes.span_id = s.span_id AND key IN (${textKeys}) AND value LIKE ? COLLATE NOCASE)`)
+				params.push(...AI_TEXT_SEARCH_KEYS, `%${input.text}%`)
+			}
+
+			return { clauses, params }
+		}
+
+		/** Load attribute values for a set of spans by key */
+		const loadSpanAttrValues = (spans: ReadonlyArray<{ trace_id: string; span_id: string }>, keys: readonly string[]): Map<string, Map<string, string>> => {
+			if (spans.length === 0 || keys.length === 0) return new Map()
+			const spanPlaceholders = spans.map(() => "(?, ?)").join(", ")
+			const keyPlaceholders = keys.map(() => "?").join(", ")
+			const spanParams = spans.flatMap((s) => [s.trace_id, s.span_id])
+
+			const rows = db.query(`
+				SELECT trace_id, span_id, key, value
+				FROM span_attributes
+				WHERE (trace_id, span_id) IN (VALUES ${spanPlaceholders})
+				AND key IN (${keyPlaceholders})
+			`).all(...spanParams, ...keys) as Array<{ trace_id: string; span_id: string; key: string; value: string }>
+
+			const result = new Map<string, Map<string, string>>()
+			for (const row of rows) {
+				const spanKey = `${row.trace_id}:${row.span_id}`
+				let attrs = result.get(spanKey)
+				if (!attrs) {
+					attrs = new Map()
+					result.set(spanKey, attrs)
+				}
+				attrs.set(row.key, row.value)
+			}
+			return result
+		}
+
+		const searchAiCalls = Effect.fn("motel/TelemetryStore.searchAiCalls")(function* (input: AiCallSearch) {
+			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
+			const limit = input.limit ?? 20
+
+			return yield* Effect.sync(() => {
+				const { clauses, params } = buildAiWhereClauses(input, cutoff)
+
+				const rows = db.query(`
+					SELECT s.trace_id, s.span_id, s.service_name, s.operation_name, s.start_time_ms, s.duration_ms, s.status
+					FROM spans AS s
+					WHERE ${clauses.join(" AND ")}
+					ORDER BY s.start_time_ms DESC
+					LIMIT ?
+				`).all(...params, limit) as Array<{
+					trace_id: string; span_id: string; service_name: string
+					operation_name: string; start_time_ms: number; duration_ms: number; status: string
+				}>
+
+				if (rows.length === 0) return [] as readonly AiCallSummary[]
+
+				// Batch-load the attributes we need for summaries
+				const summaryAttrKeys = [
+					AI_ATTR_MAP.functionId, AI_ATTR_MAP.provider, AI_ATTR_MAP.model,
+					AI_ATTR_MAP.sessionId, AI_ATTR_MAP.userId, AI_ATTR_MAP.finishReason,
+					AI_ATTR_MAP.inputTokens, AI_ATTR_MAP.outputTokens, AI_ATTR_MAP.totalTokens,
+					AI_ATTR_MAP.cachedInputTokens, AI_ATTR_MAP.reasoningTokens,
+					AI_ATTR_MAP.promptMessages, AI_ATTR_MAP.prompt, AI_ATTR_MAP.responseText,
+				]
+				const attrMap = loadSpanAttrValues(rows, summaryAttrKeys)
+
+				// Count tool call child spans per AI span
+				const spanPlaceholders = rows.map(() => "(?, ?)").join(", ")
+				const spanParams = rows.flatMap((r) => [r.trace_id, r.span_id])
+				const toolCountRows = db.query(`
+					SELECT parent_span_id, COUNT(*) AS cnt
+					FROM spans
+					WHERE (trace_id, parent_span_id) IN (VALUES ${spanPlaceholders})
+					AND operation_name LIKE 'ai.toolCall%'
+					GROUP BY trace_id, parent_span_id
+				`).all(...spanParams) as Array<{ parent_span_id: string; cnt: number }>
+				const toolCounts = new Map(toolCountRows.map((r) => [r.parent_span_id, r.cnt]))
+
+				return rows.map((row): AiCallSummary => {
+					const spanKey = `${row.trace_id}:${row.span_id}`
+					const attrs = attrMap.get(spanKey)
+					const get = (key: string) => attrs?.get(key) ?? null
+					const getNum = (key: string) => {
+						const v = get(key)
+						return v != null ? Number(v) : null
+					}
+
+					const promptContent = get(AI_ATTR_MAP.promptMessages) ?? get(AI_ATTR_MAP.prompt)
+
+					return {
+						traceId: row.trace_id,
+						spanId: row.span_id,
+						operation: parseAiOperation(row.operation_name),
+						service: row.service_name,
+						functionId: get(AI_ATTR_MAP.functionId),
+						provider: get(AI_ATTR_MAP.provider),
+						model: get(AI_ATTR_MAP.model),
+						status: row.status === "error" ? "error" : "ok",
+						startedAt: new Date(row.start_time_ms).toISOString(),
+						durationMs: row.duration_ms,
+						sessionId: get(AI_ATTR_MAP.sessionId),
+						userId: get(AI_ATTR_MAP.userId),
+						promptPreview: truncatePreview(promptContent),
+						responsePreview: truncatePreview(get(AI_ATTR_MAP.responseText)),
+						finishReason: get(AI_ATTR_MAP.finishReason),
+						toolCallCount: toolCounts.get(row.span_id) ?? 0,
+						usage: {
+							inputTokens: getNum(AI_ATTR_MAP.inputTokens),
+							outputTokens: getNum(AI_ATTR_MAP.outputTokens),
+							totalTokens: getNum(AI_ATTR_MAP.totalTokens),
+							cachedInputTokens: getNum(AI_ATTR_MAP.cachedInputTokens),
+							reasoningTokens: getNum(AI_ATTR_MAP.reasoningTokens),
+						},
+					}
+				})
+			})
+		})
+
+		const getAiCall = Effect.fn("motel/TelemetryStore.getAiCall")(function* (spanId: string) {
+			return yield* Effect.sync(() => {
+				const row = db.query(`
+					SELECT * FROM spans WHERE span_id = ? AND operation_name LIKE 'ai.%' LIMIT 1
+				`).get(spanId) as SpanRow | null
+				if (!row) return null
+
+				// Load all attributes for this span
+				const attrRows = db.query(`
+					SELECT key, value FROM span_attributes
+					WHERE trace_id = ? AND span_id = ?
+				`).all(row.trace_id, row.span_id) as Array<{ key: string; value: string }>
+				const attrs = new Map(attrRows.map((r) => [r.key, r.value]))
+				const get = (key: string) => attrs.get(key) ?? null
+				const getNum = (key: string) => {
+					const v = get(key)
+					return v != null ? Number(v) : null
+				}
+
+				// Load tool call child spans
+				const toolCallRows = db.query(`
+					SELECT span_id, operation_name, duration_ms, status, attributes_json
+					FROM spans
+					WHERE trace_id = ? AND parent_span_id = ? AND operation_name LIKE 'ai.toolCall%'
+					ORDER BY start_time_ms ASC
+				`).all(row.trace_id, row.span_id) as SpanRow[]
+
+				const toolCalls = toolCallRows.map((tc) => {
+					const tcAttrs = JSON.parse(tc.attributes_json) as Record<string, string>
+					return {
+						name: tcAttrs["ai.toolCall.name"] ?? tc.operation_name,
+						spanId: tc.span_id,
+						status: tc.status === "error" ? "error" as const : "ok" as const,
+						durationMs: tc.duration_ms,
+					}
+				})
+
+				// Load correlated logs
+				const logRows = db.query(`
+					SELECT * FROM logs WHERE span_id = ? ORDER BY timestamp_ms ASC
+				`).all(row.span_id) as LogRow[]
+				const logs = logRows.map(parseLogRow)
+
+				// Parse prompt - try as JSON first for structured display
+				const promptRaw = get(AI_ATTR_MAP.promptMessages) ?? get(AI_ATTR_MAP.prompt)
+				let promptMessages: unknown = null
+				if (promptRaw) {
+					try { promptMessages = JSON.parse(promptRaw) } catch { promptMessages = promptRaw }
+				}
+
+				// Parse tools
+				const toolsRaw = get(AI_ATTR_MAP.tools)
+				let toolsAvailable: unknown = null
+				if (toolsRaw) {
+					try { toolsAvailable = JSON.parse(toolsRaw) } catch { toolsAvailable = toolsRaw }
+				}
+
+				// Parse provider metadata
+				const providerMetaRaw = get(AI_ATTR_MAP.providerMetadata)
+				let providerMetadata: unknown = null
+				if (providerMetaRaw) {
+					try { providerMetadata = JSON.parse(providerMetaRaw) } catch { providerMetadata = providerMetaRaw }
+				}
+
+				return {
+					traceId: row.trace_id,
+					spanId: row.span_id,
+					operation: parseAiOperation(row.operation_name),
+					service: row.service_name,
+					functionId: get(AI_ATTR_MAP.functionId),
+					provider: get(AI_ATTR_MAP.provider),
+					model: get(AI_ATTR_MAP.model),
+					status: row.status === "error" ? "error" as const : "ok" as const,
+					startedAt: new Date(row.start_time_ms).toISOString(),
+					durationMs: row.duration_ms,
+					sessionId: get(AI_ATTR_MAP.sessionId),
+					userId: get(AI_ATTR_MAP.userId),
+					finishReason: get(AI_ATTR_MAP.finishReason),
+					promptMessages,
+					responseText: get(AI_ATTR_MAP.responseText),
+					toolCalls,
+					toolsAvailable,
+					providerMetadata,
+					usage: {
+						inputTokens: getNum(AI_ATTR_MAP.inputTokens),
+						outputTokens: getNum(AI_ATTR_MAP.outputTokens),
+						totalTokens: getNum(AI_ATTR_MAP.totalTokens),
+						cachedInputTokens: getNum(AI_ATTR_MAP.cachedInputTokens),
+						reasoningTokens: getNum(AI_ATTR_MAP.reasoningTokens),
+					},
+					timing: {
+						msToFirstChunk: getNum(AI_ATTR_MAP.msToFirstChunk),
+						msToFinish: getNum(AI_ATTR_MAP.msToFinish),
+						avgOutputTokensPerSecond: getNum(AI_ATTR_MAP.avgOutputTokensPerSecond),
+					},
+					logs,
+				} satisfies AiCallDetail
+			})
+		})
+
+		const aiCallStats = Effect.fn("motel/TelemetryStore.aiCallStats")(function* (input: AiCallStatsSearch) {
+			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
+			const limit = input.limit ?? 20
+
+			return yield* Effect.sync(() => {
+				const { clauses, params } = buildAiWhereClauses(input, cutoff)
+
+				// For status groupBy, we can do it purely from the spans table
+				if (input.groupBy === "status") {
+					const rows = db.query(`
+						SELECT s.status AS grp, COUNT(*) AS count, AVG(s.duration_ms) AS avg_dur
+						FROM spans AS s
+						WHERE ${clauses.join(" AND ")}
+						GROUP BY s.status
+						ORDER BY count DESC
+						LIMIT ?
+					`).all(...params, limit) as Array<{ grp: string; count: number; avg_dur: number }>
+
+					if (input.agg === "count") return rows.map((r) => ({ group: r.grp, value: r.count, count: r.count }))
+					if (input.agg === "avg_duration") return rows.map((r) => ({ group: r.grp, value: r.avg_dur, count: r.count }))
+				}
+
+				// For attribute-based groupBy, we need to join span_attributes
+				const groupByAttrKey = input.groupBy === "provider" ? AI_ATTR_MAP.provider
+					: input.groupBy === "model" ? AI_ATTR_MAP.model
+					: input.groupBy === "functionId" ? AI_ATTR_MAP.functionId
+					: input.groupBy === "sessionId" ? AI_ATTR_MAP.sessionId
+					: null
+
+				if (!groupByAttrKey) return []
+
+				// First get the matching spans with their group values
+				const rows = db.query(`
+					SELECT
+						COALESCE(ga.value, 'unknown') AS grp,
+						s.span_id,
+						s.duration_ms,
+						s.status
+					FROM spans AS s
+					LEFT JOIN span_attributes AS ga
+						ON ga.trace_id = s.trace_id AND ga.span_id = s.span_id AND ga.key = ?
+					WHERE ${clauses.join(" AND ")}
+				`).all(groupByAttrKey, ...params) as Array<{ grp: string; span_id: string; duration_ms: number; status: string }>
+
+				// Group and aggregate in JS (need p95 and token aggregation)
+				const groups = new Map<string, { durations: number[]; count: number; spanIds: string[] }>()
+				for (const row of rows) {
+					const bucket = groups.get(row.grp) ?? { durations: [], count: 0, spanIds: [] }
+					bucket.durations.push(row.duration_ms)
+					bucket.count++
+					bucket.spanIds.push(row.span_id)
+					groups.set(row.grp, bucket)
+				}
+
+				// For token aggregations, batch-load from span_attributes
+				if (input.agg === "total_input_tokens" || input.agg === "total_output_tokens") {
+					const tokenKey = input.agg === "total_input_tokens" ? AI_ATTR_MAP.inputTokens : AI_ATTR_MAP.outputTokens
+					const allSpanIds = [...groups.values()].flatMap((b) => b.spanIds)
+					if (allSpanIds.length > 0) {
+						const placeholders = allSpanIds.map(() => "?").join(", ")
+						const tokenRows = db.query(`
+							SELECT span_id, CAST(value AS REAL) AS tokens
+							FROM span_attributes
+							WHERE key = ? AND span_id IN (${placeholders})
+						`).all(tokenKey, ...allSpanIds) as Array<{ span_id: string; tokens: number }>
+
+						const tokenBySpan = new Map(tokenRows.map((r) => [r.span_id, r.tokens]))
+
+						return [...groups.entries()]
+							.map(([group, bucket]) => {
+								const total = bucket.spanIds.reduce((sum, sid) => sum + (tokenBySpan.get(sid) ?? 0), 0)
+								return { group, value: total, count: bucket.count }
+							})
+							.sort((a, b) => b.value - a.value)
+							.slice(0, limit)
+					}
+				}
+
+				return [...groups.entries()]
+					.map(([group, bucket]) => {
+						const value = input.agg === "count"
+							? bucket.count
+							: input.agg === "avg_duration"
+								? bucket.durations.reduce((s, d) => s + d, 0) / Math.max(1, bucket.count)
+								: input.agg === "p95_duration"
+									? percentile(bucket.durations, 0.95)
+									: bucket.count
+						return { group, value, count: bucket.count }
+					})
+					.sort((a, b) => b.value - a.value)
+					.slice(0, limit)
+			})
+		})
+
 		return TelemetryStore.of({
 			ingestTraces,
 			ingestLogs,
@@ -1359,6 +1755,9 @@ export const TelemetryStoreLive = Layer.effect(
 			listFacets,
 			listRecentLogs,
 			listTraceLogs,
+			searchAiCalls,
+			getAiCall,
+			aiCallStats,
 		})
 	}),
 )
