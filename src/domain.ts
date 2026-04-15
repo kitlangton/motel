@@ -16,6 +16,7 @@ export interface TraceSpanItem {
 	readonly kind: string | null
 	readonly operationName: string
 	readonly startTime: Date
+	readonly isRunning: boolean
 	readonly durationMs: number
 	readonly status: TraceSpanStatus
 	readonly depth: number
@@ -29,6 +30,7 @@ export interface TraceItem {
 	readonly serviceName: string
 	readonly rootOperationName: string
 	readonly startedAt: Date
+	readonly isRunning: boolean
 	readonly durationMs: number
 	readonly spanCount: number
 	readonly errorCount: number
@@ -41,6 +43,7 @@ export interface TraceSummaryItem {
 	readonly serviceName: string
 	readonly rootOperationName: string
 	readonly startedAt: Date
+	readonly isRunning: boolean
 	readonly durationMs: number
 	readonly spanCount: number
 	readonly errorCount: number
@@ -65,6 +68,25 @@ export interface LogItem {
 	readonly scopeName: string | null
 	readonly attributes: Readonly<Record<string, string>>
 }
+
+// ---------------------------------------------------------------------------
+// Shared query result types
+// ---------------------------------------------------------------------------
+
+export const FacetItem = Schema.Struct({
+	value: Schema.String.pipe(Schema.annotateKey({ description: "Distinct value for the faceted field" })),
+	count: Schema.Number.pipe(Schema.annotateKey({ description: "Number of occurrences" })),
+}).annotate({ identifier: "Facet" })
+
+export type FacetItem = typeof FacetItem.Type
+
+export const StatsItem = Schema.Struct({
+	group: Schema.String.pipe(Schema.annotateKey({ description: "Grouping key" })),
+	value: Schema.Number.pipe(Schema.annotateKey({ description: "Aggregate value for the chosen metric" })),
+	count: Schema.Number.pipe(Schema.annotateKey({ description: "Number of samples in the group" })),
+}).annotate({ identifier: "Stat" })
+
+export type StatsItem = typeof StatsItem.Type
 
 // ---------------------------------------------------------------------------
 // AI Call types

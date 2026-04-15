@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { Clock, Effect, Layer, Schedule, ServiceMap } from "effect"
 import { config } from "../config.js"
-import type { AiCallDetail, AiCallSummary, LogItem, SpanItem, TraceItem, TraceSummaryItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
+import type { AiCallDetail, AiCallSummary, FacetItem, LogItem, SpanItem, StatsItem, TraceItem, TraceSummaryItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
 import { AI_ATTR_MAP, AI_TEXT_SEARCH_KEYS, truncatePreview } from "../domain.js"
 import { attributeMap, nanosToMilliseconds, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
 
@@ -88,16 +88,7 @@ interface LogStatsSearch extends LogSearch {
 	readonly limit?: number
 }
 
-interface FacetItem {
-	readonly value: string
-	readonly count: number
-}
-
-interface StatsItem {
-	readonly group: string
-	readonly value: number
-	readonly count: number
-}
+// FacetItem and StatsItem imported from domain.ts
 
 interface FacetSearch {
 	readonly type: "traces" | "logs"
@@ -144,17 +135,24 @@ interface TraceSummaryRow {
 	readonly root_operation_name: string
 	readonly started_at_ms: number
 	readonly ended_at_ms?: number
+	readonly active_span_count: number
 	readonly duration_ms: number
 	readonly span_count: number
 	readonly error_count: number
 }
 
+const isSpanRunning = (startTimeMs: number, endTimeMs: number) => endTimeMs <= 0 || endTimeMs < startTimeMs
+
+const liveDurationMs = (startTimeMs: number, endTimeMs: number, isRunning: boolean) =>
+	Math.max(0, (isRunning ? Date.now() : endTimeMs) - startTimeMs)
+
 const parseSummaryRow = (row: TraceSummaryRow): TraceSummaryItem => ({
+	isRunning: row.active_span_count > 0,
 	traceId: row.trace_id,
 	serviceName: row.service_name ?? "unknown",
 	rootOperationName: row.root_operation_name ?? "unknown",
 	startedAt: new Date(row.started_at_ms),
-	durationMs: Math.max(0, row.duration_ms),
+	durationMs: row.active_span_count > 0 ? liveDurationMs(row.started_at_ms, row.ended_at_ms ?? 0, true) : Math.max(0, row.duration_ms),
 	spanCount: row.span_count,
 	errorCount: row.error_count,
 	warnings: [],
@@ -167,6 +165,7 @@ const TRACE_SUMMARY_SELECT_SQL = `
 		COALESCE(MIN(CASE WHEN parent_span_id IS NULL THEN operation_name END), MIN(operation_name)) AS root_operation_name,
 		MIN(start_time_ms) AS started_at_ms,
 		MAX(end_time_ms) AS ended_at_ms,
+		SUM(CASE WHEN end_time_ms <= 0 OR end_time_ms < start_time_ms THEN 1 ELSE 0 END) AS active_span_count,
 		MAX(end_time_ms) - MIN(start_time_ms) AS duration_ms,
 		COUNT(*) AS span_count,
 		SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count
@@ -195,24 +194,28 @@ const parseEvents = (value: string): readonly TraceSpanEvent[] => {
 	}
 }
 
-const parseSpanRow = (row: SpanRow): TraceSpanItem => ({
-	spanId: row.span_id,
-	parentSpanId: row.parent_span_id,
-	serviceName: row.service_name,
-	scopeName: row.scope_name,
-	kind: row.kind,
-	operationName: row.operation_name,
-	startTime: new Date(row.start_time_ms),
-	durationMs: row.duration_ms,
-	status: row.status === "error" ? "error" : "ok",
-	depth: 0,
-	tags: {
-		...parseRecord(row.resource_json),
-		...parseRecord(row.attributes_json),
-	},
-	warnings: [],
-	events: parseEvents(row.events_json),
-})
+const parseSpanRow = (row: SpanRow): TraceSpanItem => {
+	const isRunning = isSpanRunning(row.start_time_ms, row.end_time_ms)
+	return {
+		spanId: row.span_id,
+		parentSpanId: row.parent_span_id,
+		serviceName: row.service_name,
+		scopeName: row.scope_name,
+		kind: row.kind,
+		operationName: row.operation_name,
+		startTime: new Date(row.start_time_ms),
+		isRunning,
+		durationMs: liveDurationMs(row.start_time_ms, row.end_time_ms, isRunning),
+		status: row.status === "error" ? "error" : "ok",
+		depth: 0,
+		tags: {
+			...parseRecord(row.resource_json),
+			...parseRecord(row.attributes_json),
+		},
+		warnings: [],
+		events: parseEvents(row.events_json),
+	}
+}
 
 const parseLogRow = (row: LogRow): LogItem => ({
 	id: String(row.id),
@@ -261,6 +264,7 @@ const buildTrace = (traceId: string, spanRows: readonly SpanRow[]): TraceItem =>
 	const orderedSpans = orderTraceSpans(parsedSpans)
 	const startedAtMs = Math.min(...orderedSpans.map((span) => span.startTime.getTime()))
 	const endedAtMs = Math.max(...orderedSpans.map((span) => span.startTime.getTime() + span.durationMs))
+	const isRunning = orderedSpans.some((span) => span.isRunning)
 	const rootSpan = orderedSpans[0] ?? null
 	const spanIds = new Set(orderedSpans.map((span) => span.spanId))
 	const warnings = orderedSpans
@@ -272,6 +276,7 @@ const buildTrace = (traceId: string, spanRows: readonly SpanRow[]): TraceItem =>
 		serviceName: rootSpan?.serviceName ?? "unknown",
 		rootOperationName: rootSpan?.operationName ?? "unknown",
 		startedAt: new Date(startedAtMs),
+		isRunning,
 		durationMs: Math.max(0, endedAtMs - startedAtMs),
 		spanCount: orderedSpans.length,
 		errorCount: orderedSpans.filter((span) => span.status === "error").length,
@@ -446,6 +451,7 @@ export const TelemetryStoreLive = Layer.effect(
 				root_operation_name TEXT NOT NULL,
 				started_at_ms INTEGER NOT NULL,
 				ended_at_ms INTEGER NOT NULL,
+				active_span_count INTEGER NOT NULL DEFAULT 0,
 				duration_ms REAL NOT NULL,
 				span_count INTEGER NOT NULL,
 				error_count INTEGER NOT NULL
@@ -498,6 +504,12 @@ export const TelemetryStoreLive = Layer.effect(
 			// FTS is optional; queries will fall back to LIKE if unavailable.
 		}
 
+		try {
+			db.exec(`ALTER TABLE trace_summaries ADD COLUMN active_span_count INTEGER NOT NULL DEFAULT 0`)
+		} catch {
+			// Existing databases may already have the column.
+		}
+
 		const insertSpan = db.query(`
 			INSERT INTO spans (
 				trace_id, span_id, parent_span_id, service_name, scope_name, operation_name, kind,
@@ -526,9 +538,9 @@ export const TelemetryStoreLive = Layer.effect(
 
 		const upsertTraceSummary = db.query(`
 			INSERT OR REPLACE INTO trace_summaries (
-				trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, duration_ms, span_count, error_count
+				trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, active_span_count, duration_ms, span_count, error_count
 			)
-			SELECT trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, duration_ms, span_count, error_count
+			SELECT trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, active_span_count, duration_ms, span_count, error_count
 			FROM (
 				${TRACE_SUMMARY_SELECT_SQL}
 				WHERE trace_id = ?
@@ -538,11 +550,14 @@ export const TelemetryStoreLive = Layer.effect(
 
 		const rebuildTraceSummaries = db.query(`
 			INSERT INTO trace_summaries (
-				trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, duration_ms, span_count, error_count
+				trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, active_span_count, duration_ms, span_count, error_count
 			)
 			${TRACE_SUMMARY_SELECT_SQL}
 			GROUP BY trace_id
 		`)
+
+		db.query(`DELETE FROM trace_summaries`).run()
+		rebuildTraceSummaries.run()
 
 		const deleteSpanAttributes = db.query(`DELETE FROM span_attributes WHERE trace_id = ? AND span_id = ?`)
 		const insertSpanAttribute = db.query(`INSERT INTO span_attributes (trace_id, span_id, key, value) VALUES (?, ?, ?, ?)`)
@@ -767,7 +782,7 @@ export const TelemetryStoreLive = Layer.effect(
 				}
 
 				return db.query(`
-					SELECT trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, duration_ms, span_count, error_count
+					SELECT trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, active_span_count, duration_ms, span_count, error_count
 					FROM trace_summaries
 					WHERE ${clauses.join(" AND ")}
 					ORDER BY started_at_ms DESC, trace_id DESC
@@ -821,7 +836,7 @@ export const TelemetryStoreLive = Layer.effect(
 				}
 
 				const rows = db.query(`
-					SELECT trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, duration_ms, span_count, error_count
+					SELECT trace_id, service_name, root_operation_name, started_at_ms, ended_at_ms, active_span_count, duration_ms, span_count, error_count
 					FROM trace_summaries
 					WHERE ${clauses.join(" AND ")}
 					ORDER BY started_at_ms DESC, trace_id DESC

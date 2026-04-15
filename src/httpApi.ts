@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { AiCallSummary, AiCallDetail, FacetItem, StatsItem } from "./domain.js"
 
 const ErrorResponse = Schema.Struct({ error: Schema.String })
 const Meta = Schema.Struct({
@@ -24,6 +25,7 @@ const TraceSpan = Schema.Struct({
 	kind: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Span kind: client, server, producer, consumer, or internal" })),
 	operationName: Schema.String.pipe(Schema.annotateKey({ description: "The operation this span represents (e.g. HTTP handler, DB query)" })),
 	startTime: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
+	isRunning: Schema.Boolean.pipe(Schema.annotateKey({ description: "True when the span has not reported an end timestamp yet" })),
 	durationMs: Schema.Number.pipe(Schema.annotateKey({ description: "Wall-clock duration in milliseconds" })),
 	status: Schema.Literals(["ok", "error"]).pipe(Schema.annotateKey({ description: "ok or error" })),
 	depth: Schema.Number.pipe(Schema.annotateKey({ description: "Nesting depth in the span tree (root = 0)" })),
@@ -37,6 +39,7 @@ const Trace = Schema.Struct({
 	serviceName: Schema.String.pipe(Schema.annotateKey({ description: "Service that owns the root span" })),
 	rootOperationName: Schema.String.pipe(Schema.annotateKey({ description: "Operation name of the root span" })),
 	startedAt: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp of the earliest span" })),
+	isRunning: Schema.Boolean.pipe(Schema.annotateKey({ description: "True when any span in the trace is still open" })),
 	durationMs: Schema.Number.pipe(Schema.annotateKey({ description: "End-to-end trace duration in milliseconds" })),
 	spanCount: Schema.Number,
 	errorCount: Schema.Number.pipe(Schema.annotateKey({ description: "Number of spans with status=error" })),
@@ -49,6 +52,7 @@ const TraceSummary = Schema.Struct({
 	serviceName: Schema.String,
 	rootOperationName: Schema.String,
 	startedAt: Schema.String,
+	isRunning: Schema.Boolean,
 	durationMs: Schema.Number,
 	spanCount: Schema.Number,
 	errorCount: Schema.Number,
@@ -74,16 +78,8 @@ const Log = Schema.Struct({
 	attributes: Schema.Unknown.pipe(Schema.annotateKey({ description: "Merged resource + log attributes as key-value pairs" })),
 }).annotate({ identifier: "Log" })
 
-const Facet = Schema.Struct({
-	value: Schema.String.pipe(Schema.annotateKey({ description: "Distinct value for the faceted field" })),
-	count: Schema.Number.pipe(Schema.annotateKey({ description: "Number of occurrences" })),
-}).annotate({ identifier: "Facet" })
-
-const Stat = Schema.Struct({
-	group: Schema.String.pipe(Schema.annotateKey({ description: "Grouping key" })),
-	value: Schema.Number.pipe(Schema.annotateKey({ description: "Aggregate value for the chosen metric" })),
-	count: Schema.Number.pipe(Schema.annotateKey({ description: "Number of samples in the group" })),
-}).annotate({ identifier: "Stat" })
+const Facet = FacetItem
+const Stat = StatsItem
 
 const ServiceList = Schema.Struct({ data: Schema.Array(Schema.String) })
 const Health = Schema.Struct({
@@ -116,70 +112,8 @@ const LogList = Schema.Struct({ data: Schema.Array(Log), meta: Meta })
 const FacetList = Schema.Struct({ data: Schema.Array(Facet) })
 const StatList = Schema.Struct({ data: Schema.Array(Stat) })
 
-// AI Call schemas (imported from domain for the canonical types)
-const AiUsageSchema = Schema.Struct({
-	inputTokens: Schema.NullOr(Schema.Number),
-	outputTokens: Schema.NullOr(Schema.Number),
-	totalTokens: Schema.NullOr(Schema.Number),
-	cachedInputTokens: Schema.NullOr(Schema.Number),
-	reasoningTokens: Schema.NullOr(Schema.Number),
-}).annotate({ identifier: "AiUsage" })
-
-const AiCallSummarySchema = Schema.Struct({
-	traceId: Schema.String,
-	spanId: Schema.String,
-	operation: Schema.String.pipe(Schema.annotateKey({ description: "AI operation: streamText, generateText, streamObject, etc." })),
-	service: Schema.String,
-	functionId: Schema.NullOr(Schema.String),
-	provider: Schema.NullOr(Schema.String),
-	model: Schema.NullOr(Schema.String),
-	status: Schema.Literals(["ok", "error"]),
-	startedAt: Schema.String,
-	durationMs: Schema.Number,
-	sessionId: Schema.NullOr(Schema.String),
-	userId: Schema.NullOr(Schema.String),
-	promptPreview: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "First ~200 chars of prompt content" })),
-	responsePreview: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "First ~200 chars of response text" })),
-	finishReason: Schema.NullOr(Schema.String),
-	toolCallCount: Schema.Number,
-	usage: Schema.NullOr(AiUsageSchema),
-}).annotate({ identifier: "AiCallSummary" })
-
-const AiCallDetailSchema = Schema.Struct({
-	traceId: Schema.String,
-	spanId: Schema.String,
-	operation: Schema.String,
-	service: Schema.String,
-	functionId: Schema.NullOr(Schema.String),
-	provider: Schema.NullOr(Schema.String),
-	model: Schema.NullOr(Schema.String),
-	status: Schema.Literals(["ok", "error"]),
-	startedAt: Schema.String,
-	durationMs: Schema.Number,
-	sessionId: Schema.NullOr(Schema.String),
-	userId: Schema.NullOr(Schema.String),
-	finishReason: Schema.NullOr(Schema.String),
-	promptMessages: Schema.NullOr(Schema.Unknown),
-	responseText: Schema.NullOr(Schema.String),
-	toolCalls: Schema.Array(Schema.Struct({
-		name: Schema.String,
-		spanId: Schema.NullOr(Schema.String),
-		status: Schema.Literals(["ok", "error"]),
-		durationMs: Schema.NullOr(Schema.Number),
-	})),
-	toolsAvailable: Schema.NullOr(Schema.Unknown),
-	providerMetadata: Schema.NullOr(Schema.Unknown),
-	usage: Schema.NullOr(AiUsageSchema),
-	timing: Schema.Struct({
-		msToFirstChunk: Schema.NullOr(Schema.Number),
-		msToFinish: Schema.NullOr(Schema.Number),
-		avgOutputTokensPerSecond: Schema.NullOr(Schema.Number),
-	}),
-	logs: Schema.Array(Schema.Unknown),
-}).annotate({ identifier: "AiCallDetail" })
-
-const AiCallList = Schema.Struct({ data: Schema.Array(AiCallSummarySchema), meta: Meta })
-const AiCallDetailResponse = Schema.Struct({ data: AiCallDetailSchema })
+const AiCallList = Schema.Struct({ data: Schema.Array(AiCallSummary), meta: Meta })
+const AiCallDetailResponse = Schema.Struct({ data: AiCallDetail })
 
 // Shared query parameter schemas
 const LookbackParam = Schema.optionalKey(Schema.String).pipe(
