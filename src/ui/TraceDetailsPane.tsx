@@ -58,10 +58,15 @@ export const TraceDetailsPane = ({
 			? colors.error
 			: colors.passing
 
-	const previewMaxLines = selectedSpan ? Math.min(spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length, 8) : 0
+	// Fixed preview reservation keeps the waterfall viewport stable during span
+	// navigation — without this, each span's varying attribute count changes the
+	// viewport size, causing the virtual window to jump around.
+	const maxPreviewAllocation = Math.min(8, Math.max(2, Math.floor(bodyLines * 0.2)))
+	const previewReserved = selectedSpanIndex !== null ? maxPreviewAllocation + 1 : 0 // +1 for divider
+	const previewMaxLines = selectedSpan ? Math.min(spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length, maxPreviewAllocation) : 0
 	// Header section: 1 (header) + 3 (info lines) + 1 (divider) = 5 rows
 	const headerRows = 5
-	const waterfallBodyLines = Math.max(4, bodyLines - previewMaxLines - (previewMaxLines > 0 ? 1 : 0))
+	const waterfallBodyLines = Math.max(4, bodyLines - previewReserved)
 
 	return (
 		<box flexDirection="column" height={bodyLines + headerRows}>

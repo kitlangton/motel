@@ -6,7 +6,8 @@ import { Schema, SchemaTransformation } from "effect"
 
 const StringRecord = Schema.Record(Schema.String, Schema.String)
 
-/** Schema where Type = Date, Encoded = string (ISO 8601). */
+/** Schema where Type = Date, Encoded = string (ISO 8601).
+ * Replace with Schema.DateFromString when upgrading past beta.43. */
 const DateFromString = Schema.String.pipe(
 	Schema.decodeTo(
 		Schema.Date,

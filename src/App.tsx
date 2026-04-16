@@ -259,12 +259,12 @@ export const App = () => {
 		}
 	}, [selectedTrace, selectedSpanIndex, collapsedSpanIds, setSelectedSpanIndex, setDetailView])
 
-	// Scroll selected trace into view
+	// Scroll selected trace into view (use summary ID, not detail which loads async)
 	useLayoutEffect(() => {
-		const traceId = selectedTrace?.traceId
+		const traceId = selectedTraceSummary?.traceId
 		if (!traceId) return
 		traceListScrollRef.current?.scrollChildIntoView(traceRowId(traceId))
-	}, [selectedTraceIndex, selectedTrace?.traceId, filterText])
+	}, [selectedTraceIndex, selectedTraceSummary?.traceId, filterText])
 
 	// Load trace logs
 	useEffect(() => {

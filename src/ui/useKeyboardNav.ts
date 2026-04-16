@@ -1,6 +1,6 @@
 import { useAtom } from "@effect/atom-react"
 import { useKeyboard } from "@opentui/react"
-import { useEffect, useRef } from "react"
+import { useLayoutEffect, useRef } from "react"
 import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { otelServerInstructions } from "../instructions.ts"
 import { copyToClipboard, traceUiUrl } from "./format.ts"
@@ -50,7 +50,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [serviceLogState] = useAtom(serviceLogStateAtom)
 	const [selectedSpanIndex, setSelectedSpanIndex] = useAtom(selectedSpanIndexAtom)
 	const [selectedServiceLogIndex, setSelectedServiceLogIndex] = useAtom(selectedServiceLogIndexAtom)
-	const [, setSelectedTraceIndex] = useAtom(selectedTraceIndexAtom)
+	const [selectedTraceIndex, setSelectedTraceIndex] = useAtom(selectedTraceIndexAtom)
 	const [selectedTraceService, setSelectedTraceService] = useAtom(selectedTraceServiceAtom)
 	const [detailView, setDetailView] = useAtom(detailViewAtom)
 	const [showHelp, setShowHelp] = useAtom(showHelpAtom)
@@ -67,9 +67,12 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
 
-	const stateRef = useRef({ traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params })
-	useEffect(() => {
-		stateRef.current = { traceState, serviceLogState, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params }
+	const stateRef = useRef({ traceState, serviceLogState, selectedTraceIndex, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params })
+	// Keep the keyboard handler's state mirror in sync before the next paint.
+	// OpenTUI's own effect-event helper uses useLayoutEffect for this same reason:
+	// rapid repeated keypresses can otherwise observe stale selection state.
+	useLayoutEffect(() => {
+		stateRef.current = { traceState, serviceLogState, selectedTraceIndex, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params }
 	})
 
 	const clearPendingG = () => {
@@ -123,28 +126,30 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const s = $()
 		const filtered = s.filteredTraces
 		if (filtered.length === 0) return
-		// Find the current trace's position in the filtered list
-		const currentFilteredIdx = s.selectedTrace
-			? filtered.findIndex((t) => t.traceId === s.selectedTrace!.traceId)
-			: -1
-		const nextFilteredIdx = currentFilteredIdx < 0
-			? 0
-			: direction < 0
-				? currentFilteredIdx <= 0 ? filtered.length - 1 : currentFilteredIdx - 1
-				: currentFilteredIdx >= filtered.length - 1 ? 0 : currentFilteredIdx + 1
-		const nextTrace = filtered[nextFilteredIdx]
-		if (!nextTrace) return
-		const fullIndex = s.traceState.data.findIndex((t) => t.traceId === nextTrace.traceId)
-		if (fullIndex >= 0) setSelectedTraceIndex(fullIndex)
+		setSelectedTraceIndex((current) => {
+			const currentTraceId = s.traceState.data[current]?.traceId
+			const currentFilteredIdx = currentTraceId
+				? filtered.findIndex((t) => t.traceId === currentTraceId)
+				: -1
+			if (currentFilteredIdx < 0) {
+				const fallbackTrace = filtered[0]
+				if (!fallbackTrace) return current
+				const fallbackIndex = s.traceState.data.findIndex((t) => t.traceId === fallbackTrace.traceId)
+				return fallbackIndex >= 0 ? fallbackIndex : current
+			}
+			const nextFilteredIdx = Math.max(0, Math.min(currentFilteredIdx + direction, filtered.length - 1))
+			const nextTrace = filtered[nextFilteredIdx]
+			if (!nextTrace) return current
+			const fullIndex = s.traceState.data.findIndex((t) => t.traceId === nextTrace.traceId)
+			return fullIndex >= 0 ? fullIndex : current
+		})
 	}
 
 	const moveServiceLogBy = (direction: -1 | 1) => {
 		const s = $()
 		setSelectedServiceLogIndex((current) => {
 			if (s.serviceLogState.data.length === 0) return 0
-			return direction < 0
-				? current <= 0 ? s.serviceLogState.data.length - 1 : current - 1
-				: current >= s.serviceLogState.data.length - 1 ? 0 : current + 1
+			return Math.max(0, Math.min(current + direction, s.serviceLogState.data.length - 1))
 		})
 	}
 
@@ -186,11 +191,17 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		} else {
 			const filtered = s.filteredTraces
 			if (filtered.length === 0) return
-			const currentFilteredIdx = s.selectedTrace
-				? filtered.findIndex((t) => t.traceId === s.selectedTrace!.traceId)
-				: 0
-			const nextIdx = Math.max(0, Math.min(currentFilteredIdx + direction * s.tracePageSize, filtered.length - 1))
-			selectFilteredTraceAt(nextIdx)
+			setSelectedTraceIndex((current) => {
+				const currentTraceId = s.traceState.data[current]?.traceId
+				const currentFilteredIdx = currentTraceId
+					? filtered.findIndex((t) => t.traceId === currentTraceId)
+					: 0
+				const nextIdx = Math.max(0, Math.min(currentFilteredIdx + direction * s.tracePageSize, filtered.length - 1))
+				const nextTrace = filtered[nextIdx]
+				if (!nextTrace) return current
+				const fullIndex = s.traceState.data.findIndex((t) => t.traceId === nextTrace.traceId)
+				return fullIndex >= 0 ? fullIndex : current
+			})
 		}
 	}
 
@@ -359,7 +370,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				const visibleCount = getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds).length
 				setSelectedSpanIndex((current) => {
 					if (current === null || visibleCount === 0) return 0
-					return current <= 0 ? visibleCount - 1 : current - 1
+					return Math.max(0, current - 1)
 				})
 			} else {
 				moveTraceBy(-1)
@@ -373,7 +384,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				const visibleCount = getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds).length
 				setSelectedSpanIndex((current) => {
 					if (current === null || visibleCount === 0) return 0
-					return current >= visibleCount - 1 ? 0 : current + 1
+					return Math.min(current + 1, visibleCount - 1)
 				})
 			} else {
 				moveTraceBy(1)
