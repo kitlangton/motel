@@ -1,3 +1,4 @@
+import { memo } from "react"
 import { config } from "../config.ts"
 import type { TraceSummaryItem } from "../domain.ts"
 import { fitCell, formatDuration, lifecycleLabel, relativeTime, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"

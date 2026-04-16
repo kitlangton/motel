@@ -1,3 +1,4 @@
+import { useMemo } from "react"
 import type { TraceItem } from "../domain.ts"
 import { formatDuration, formatShortDate, formatTimestamp, lifecycleLabel, traceUiUrl } from "./format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, PlainLine, TextLine } from "./primitives.tsx"
@@ -28,15 +29,24 @@ export const TraceDetailsPane = ({
 	focused?: boolean
 	onSelectSpan: (index: number) => void
 }) => {
-	const filteredSpans = trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : []
-	const selectedSpan = trace && selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
+	const filteredSpans = useMemo(
+		() => trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : [],
+		[trace, collapsedSpanIds],
+	)
+	const selectedSpan = selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
 	const traceLogCount = traceLogsState.data.length
-	const selectedSpanLogs = selectedSpan ? traceLogsState.data.filter((log) => log.spanId === selectedSpan.spanId) : []
-	const spanLogCounts = new Map<string, number>()
-	for (const log of traceLogsState.data) {
-		if (!log.spanId) continue
-		spanLogCounts.set(log.spanId, (spanLogCounts.get(log.spanId) ?? 0) + 1)
-	}
+	const spanLogCounts = useMemo(() => {
+		const counts = new Map<string, number>()
+		for (const log of traceLogsState.data) {
+			if (!log.spanId) continue
+			counts.set(log.spanId, (counts.get(log.spanId) ?? 0) + 1)
+		}
+		return counts
+	}, [traceLogsState.data])
+	const selectedSpanLogs = useMemo(
+		() => selectedSpan ? traceLogsState.data.filter((log) => log.spanId === selectedSpan.spanId) : [],
+		[selectedSpan, traceLogsState.data],
+	)
 	const focusIndicator = focused ? "\u25b8 " : ""
 	const detailHeaderTitle = detailView === "span-detail" && selectedSpan
 		? `${focusIndicator}SPAN DETAIL`

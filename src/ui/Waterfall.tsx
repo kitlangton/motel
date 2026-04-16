@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { memo, useRef } from "react"
 import type { LogItem, TraceItem, TraceSpanItem } from "../domain.ts"
 import { formatDuration, lifecycleLabel, truncateText } from "./format.ts"
 import { BlankRow, TextLine } from "./primitives.tsx"
@@ -133,7 +133,7 @@ export const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[]
 	return tagResults.slice(0, maxEntries)
 }
 
-const WaterfallRow = ({
+const WaterfallRow = memo(({
 	id,
 	span,
 	logCount,
@@ -197,7 +197,8 @@ const WaterfallRow = ({
 			</TextLine>
 		</box>
 	)
-}
+})
+WaterfallRow.displayName = "WaterfallRow"
 
 export const SpanPreview = ({
 	span,

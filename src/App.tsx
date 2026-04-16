@@ -1,8 +1,9 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useAtom } from "@effect/atom-react"
 import { useTerminalDimensions } from "@opentui/react"
-import { useEffect, useLayoutEffect, useRef } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { config } from "./config.js"
+import type { LogItem, TraceItem } from "./domain.ts"
 import { fitCell, formatShortDate, formatTimestamp, traceRowId } from "./ui/format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, FilterBar, FooterHints, PlainLine, SeparatorColumn, TextLine } from "./ui/primitives.tsx"
 import { ServiceLogsView } from "./ui/ServiceLogs.tsx"
@@ -94,6 +95,9 @@ export const App = () => {
 	const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const traceListScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const selectedTraceRef = useRef<string | null>(null)
+	const traceDetailCacheRef = useRef(new Map<string, { data: TraceItem | null; fetchedAt: Date }>())
+	const traceLogCacheRef = useRef(new Map<string, { data: readonly LogItem[]; fetchedAt: Date }>())
+	const serviceLogCacheRef = useRef(new Map<string, { data: readonly LogItem[]; fetchedAt: Date }>())
 
 	const flashNotice = (message: string) => {
 		if (noticeTimeoutRef.current !== null) {
@@ -122,6 +126,12 @@ export const App = () => {
 		const id = setInterval(() => setRefreshNonce((n) => n + 1), 5000)
 		return () => clearInterval(id)
 	}, [autoRefresh])
+
+	useEffect(() => {
+		traceDetailCacheRef.current.clear()
+		traceLogCacheRef.current.clear()
+		serviceLogCacheRef.current.clear()
+	}, [refreshNonce])
 
 	// Load traces
 	useEffect(() => {
@@ -198,19 +208,33 @@ export const App = () => {
 			return
 		}
 
+		const cached = traceDetailCacheRef.current.get(selectedTraceId)
+		if (cached) {
+			setTraceDetailState({
+				status: "ready",
+				traceId: selectedTraceId,
+				data: cached.data,
+				error: null,
+				fetchedAt: cached.fetchedAt,
+			})
+			return
+		}
+
 		let cancelled = false
 
-		const load = async () => {
-			setTraceDetailState((current) => ({
-				status: current.traceId === selectedTraceId && current.fetchedAt !== null ? "ready" : "loading",
-				traceId: selectedTraceId,
-				data: current.traceId === selectedTraceId ? current.data : null,
-				error: null,
-				fetchedAt: current.traceId === selectedTraceId ? current.fetchedAt : null,
-			}))
+		setTraceDetailState((current) => ({
+			status: current.traceId === selectedTraceId && current.fetchedAt !== null ? "ready" : "loading",
+			traceId: selectedTraceId,
+			data: current.traceId === selectedTraceId ? current.data : null,
+			error: null,
+			fetchedAt: current.traceId === selectedTraceId ? current.fetchedAt : null,
+		}))
 
+		void (async () => {
 			try {
 				const trace = await loadTraceDetail(selectedTraceId)
+				const fetchedAt = new Date()
+				traceDetailCacheRef.current.set(selectedTraceId, { data: trace, fetchedAt })
 				if (cancelled) return
 
 				setTraceDetailState({
@@ -218,7 +242,7 @@ export const App = () => {
 					traceId: selectedTraceId,
 					data: trace,
 					error: null,
-					fetchedAt: new Date(),
+					fetchedAt,
 				})
 			} catch (error) {
 				if (cancelled) return
@@ -230,13 +254,9 @@ export const App = () => {
 					fetchedAt: null,
 				})
 			}
-		}
+		})()
 
-		void load()
-
-		return () => {
-			cancelled = true
-		}
+		return () => { cancelled = true }
 	}, [refreshNonce, selectedTraceId, setTraceDetailState])
 
 	// Reset collapsed spans and span selection when trace changes
@@ -274,45 +294,36 @@ export const App = () => {
 			return
 		}
 
+		const cached = traceLogCacheRef.current.get(traceId)
+		if (cached) {
+			setLogState({ status: "ready", traceId, data: cached.data, error: null, fetchedAt: cached.fetchedAt })
+			return
+		}
+
 		let cancelled = false
 
-		const load = async () => {
-			setLogState((current) => ({
-				status: current.traceId === traceId && current.fetchedAt !== null ? "ready" : "loading",
-				traceId,
-				data: current.traceId === traceId ? current.data : [],
-				error: null,
-				fetchedAt: current.traceId === traceId ? current.fetchedAt : null,
-			}))
+		setLogState((current) => ({
+			status: current.traceId === traceId && current.fetchedAt !== null ? "ready" : "loading",
+			traceId,
+			data: current.traceId === traceId ? current.data : [],
+			error: null,
+			fetchedAt: current.traceId === traceId ? current.fetchedAt : null,
+		}))
 
+		void (async () => {
 			try {
 				const logs = await loadTraceLogs(traceId)
+				const fetchedAt = new Date()
+				traceLogCacheRef.current.set(traceId, { data: logs, fetchedAt })
 				if (cancelled) return
-
-				setLogState({
-					status: "ready",
-					traceId,
-					data: logs,
-					error: null,
-					fetchedAt: new Date(),
-				})
+				setLogState({ status: "ready", traceId, data: logs, error: null, fetchedAt })
 			} catch (error) {
 				if (cancelled) return
-				setLogState({
-					status: "error",
-					traceId,
-					data: [],
-					error: error instanceof Error ? error.message : String(error),
-					fetchedAt: null,
-				})
+				setLogState({ status: "error", traceId, data: [], error: error instanceof Error ? error.message : String(error), fetchedAt: null })
 			}
-		}
+		})()
 
-		void load()
-
-		return () => {
-			cancelled = true
-		}
+		return () => { cancelled = true }
 	}, [refreshNonce, selectedTraceId, setLogState])
 
 	// Load service logs
@@ -325,45 +336,36 @@ export const App = () => {
 			return
 		}
 
+		const cached = serviceLogCacheRef.current.get(serviceName)
+		if (cached) {
+			setServiceLogState({ status: "ready", serviceName, data: cached.data, error: null, fetchedAt: cached.fetchedAt })
+			return
+		}
+
 		let cancelled = false
 
-		const load = async () => {
-			setServiceLogState((current) => ({
-				status: current.serviceName === serviceName && current.fetchedAt !== null ? "ready" : "loading",
-				serviceName,
-				data: current.serviceName === serviceName ? current.data : [],
-				error: null,
-				fetchedAt: current.serviceName === serviceName ? current.fetchedAt : null,
-			}))
+		setServiceLogState((current) => ({
+			status: current.serviceName === serviceName && current.fetchedAt !== null ? "ready" : "loading",
+			serviceName,
+			data: current.serviceName === serviceName ? current.data : [],
+			error: null,
+			fetchedAt: current.serviceName === serviceName ? current.fetchedAt : null,
+		}))
 
+		void (async () => {
 			try {
 				const logs = await loadServiceLogs(serviceName)
+				const fetchedAt = new Date()
+				serviceLogCacheRef.current.set(serviceName, { data: logs, fetchedAt })
 				if (cancelled) return
-
-				setServiceLogState({
-					status: "ready",
-					serviceName,
-					data: logs,
-					error: null,
-					fetchedAt: new Date(),
-				})
+				setServiceLogState({ status: "ready", serviceName, data: logs, error: null, fetchedAt })
 			} catch (error) {
 				if (cancelled) return
-				setServiceLogState({
-					status: "error",
-					serviceName,
-					data: [],
-					error: error instanceof Error ? error.message : String(error),
-					fetchedAt: null,
-				})
+				setServiceLogState({ status: "error", serviceName, data: [], error: error instanceof Error ? error.message : String(error), fetchedAt: null })
 			}
-		}
+		})()
 
-		void load()
-
-		return () => {
-			cancelled = true
-		}
+		return () => { cancelled = true }
 	}, [detailView, refreshNonce, selectedTraceService, setServiceLogState])
 
 	// Clamp service log index
@@ -419,18 +421,18 @@ export const App = () => {
 	const headerLine = `${fitCell(headerLeft, Math.max(0, headerFooterWidth - headerRight.length))}${headerRight}`
 	const visibleFooterNotice = footerNotice ? fitCell(footerNotice.trimEnd(), headerFooterWidth) : null
 
-	const selectTraceById = (traceId: string) => {
+	const selectTraceById = useCallback((traceId: string) => {
 		const index = traceState.data.findIndex((trace) => trace.traceId === traceId)
 		if (index >= 0) setSelectedTraceIndex(index)
-	}
+	}, [traceState.data, setSelectedTraceIndex])
 
-	const selectSpan = (index: number) => {
+	const selectSpan = useCallback((index: number) => {
 		if (!selectedTrace) return
 		const visibleCount = getVisibleSpans(selectedTrace.spans, collapsedSpanIds).length
 		setSelectedSpanIndex(Math.max(0, Math.min(index, visibleCount - 1)))
-	}
+	}, [selectedTrace, collapsedSpanIds, setSelectedSpanIndex])
 
-	const traceListProps = {
+	const traceListProps = useMemo(() => ({
 		traces: filteredTraces,
 		selectedTraceId,
 		status: traceState.status,
@@ -443,7 +445,7 @@ export const App = () => {
 		sortMode: traceSort,
 		totalCount: filterText ? traceState.data.length : undefined,
 		onSelectTrace: selectTraceById,
-	} as const
+	} as const), [filteredTraces, selectedTraceId, traceState.status, traceState.error, leftContentWidth, traceState.services, selectedTraceService, spanNavActive, filterText, traceSort, traceState.data.length, selectTraceById])
 
 	return (
 		<box flexGrow={1} flexDirection="column">
