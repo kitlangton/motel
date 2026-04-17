@@ -374,19 +374,19 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				try: getStatus,
 				catch: mapError,
 			}),
-		),
+		)(),
 		ensure: Effect.fn("DaemonManager.ensure")(() =>
 			Effect.tryPromise({
 				try: ensure,
 				catch: mapError,
 			}),
-		),
+		)(),
 		stop: Effect.fn("DaemonManager.stop")(() =>
 			Effect.tryPromise({
 				try: stop,
 				catch: mapError,
 			}),
-		),
+		)(),
 	}
 }
 
