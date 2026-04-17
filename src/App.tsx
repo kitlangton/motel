@@ -161,7 +161,13 @@ export const App = () => {
 		[selectedSpan, logState.data],
 	)
 
-	const showSplit = isWideLayout
+	// Top/bottom frame dividers only render junction glyphs (`┬` / `┴`)
+	// when there's actually a vertical SeparatorColumn in the workspace
+	// below/above them to meet. Service-logs view is wide but single-pane,
+	// so its frame dividers must be plain — otherwise the junction floats
+	// above an empty column and leaves a visible stale sliver when
+	// toggling tab back and forth with the trace view.
+	const showSplit = isWideLayout && detailView !== "service-logs"
 
 	return (
 		<box width={width ?? 100} height={height ?? 24} flexGrow={1} flexDirection="column" backgroundColor={RGBA.fromHex(colors.screenBg)}>
