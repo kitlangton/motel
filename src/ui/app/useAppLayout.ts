@@ -29,7 +29,9 @@ export const useAppLayout = ({ width, height, notice, detailView, selectedSpanIn
 	const leftPaneWidth = isWideLayout ? Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio)) : contentWidth
 	const rightPaneWidth = isWideLayout ? Math.max(28, contentWidth - leftPaneWidth - splitGap) : contentWidth
 	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 3) : Math.max(24, contentWidth - sectionPadding * 2)
-	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding * 2) : Math.max(24, contentWidth - sectionPadding * 2)
+	// Right pane keeps only left padding; the vertical pane divider on the
+	// right provides enough visual separation without a trailing blank column.
+	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding) : Math.max(24, contentWidth - sectionPadding * 2)
 	const headerFooterWidth = Math.max(24, contentWidth - 2)
 	const wideBodyHeight = availableContentHeight
 	// TraceDetailsPane + SpanDetailPane both reserve 4 rows for their header

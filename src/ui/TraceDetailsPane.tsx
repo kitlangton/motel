@@ -86,41 +86,32 @@ export const TraceDetailsPane = ({
 	const opLeft = traceMeta?.rootOperationName ?? ""
 	const opGap = Math.max(2, contentWidth - opLeft.length - dateStr.length)
 	const warningCount = traceMeta?.warnings.length ?? 0
-	const firstWarning = traceMeta?.warnings[0] ?? ""
 
 	return (
 		<box flexDirection="column" width={paneWidth} height={bodyLines + TRACE_DETAILS_HEADER_ROWS} overflow="hidden">
-			<box paddingLeft={1} paddingRight={1}>
+			<box paddingLeft={1} paddingRight={0}>
 				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
 			</box>
 			{trace ? (
 				<>
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<TextLine>
 							<span>{opLeft}</span>
 							<span>{" ".repeat(opGap)}</span>
 							<span fg={colors.muted}>{dateStr}</span>
 						</TextLine>
-						{warningCount > 0 ? (
-							<TextLine>
-								<span fg={colors.defaultService}>{trace.serviceName}</span>
-								<span fg={colors.separator}>{SEPARATOR}</span>
-								<span fg={colors.count}>{trace.spanCount} spans</span>
-								<span fg={colors.separator}>{SEPARATOR}</span>
-								<span fg={colors.error}>{warningCount} warning{warningCount === 1 ? "" : "s"}: {firstWarning}</span>
-							</TextLine>
-						) : (
-							<TextLine>
-								<span fg={colors.defaultService}>{trace.serviceName}</span>
-								<span fg={colors.separator}>{SEPARATOR}</span>
-								<span fg={colors.count}>{trace.spanCount} spans</span>
-								<span fg={colors.separator}>{SEPARATOR}</span>
-								<span fg={colors.muted}>{trace.traceId.slice(0, 16)}</span>
-							</TextLine>
-						)}
+						<TextLine>
+							<span fg={colors.count}>{trace.spanCount} spans</span>
+							{warningCount > 0 ? (
+								<>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={colors.error}>{warningCount} warning{warningCount === 1 ? "" : "s"}</span>
+								</>
+							) : null}
+						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<WaterfallTimeline
 							trace={trace}
 							filteredSpans={filteredSpans}
@@ -136,31 +127,29 @@ export const TraceDetailsPane = ({
 				</>
 			) : isLoadingTrace && traceMeta ? (
 				<>
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<TextLine>
 							<span>{opLeft}</span>
 							<span>{" ".repeat(opGap)}</span>
 							<span fg={colors.muted}>{dateStr}</span>
 						</TextLine>
 						<TextLine>
-							<span fg={colors.defaultService}>{traceMeta.serviceName}</span>
-							<span fg={colors.separator}>{SEPARATOR}</span>
 							<span fg={colors.count}>{traceMeta.spanCount} spans</span>
 							<span fg={colors.separator}>{SEPARATOR}</span>
 							<span fg={colors.count}>warming adjacent trace...</span>
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<PlainLine text="Loading trace details..." fg={colors.count} />
 					</box>
 				</>
 			) : hasTraceSelection && traceStatus === "error" ? (
-				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+				<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 					<PlainLine text={traceError ?? "Could not load trace."} fg={colors.error} />
 				</box>
 			) : (
-				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+				<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 					<PlainLine text="No trace selected. Use j/k in the trace list." fg={colors.muted} />
 				</box>
 			)}

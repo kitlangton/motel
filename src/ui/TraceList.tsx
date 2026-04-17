@@ -12,9 +12,12 @@ const getTraceRowLayout = (contentWidth: number) => {
 	const durationWidth = 8
 	const countWidth = 6
 	const ageWidth = 4
-	// Keep the operation column intentionally capped so the metrics cluster stays
-	// visually closer, but still allow common operation names to fit cleanly.
-	const titleWidth = Math.min(20, Math.max(8, contentWidth - stateWidth - durationWidth - countWidth - ageWidth - 2))
+	// Row layout: state + gap + title + duration + gap + count + gap + age.
+	// Let the title expand to fill whatever width is left so the metrics
+	// cluster lands against the right edge of the pane instead of floating
+	// in a fixed 20-char column with a big dead gap to its right.
+	const fixed = stateWidth + durationWidth + countWidth + ageWidth + 3
+	const titleWidth = Math.max(8, contentWidth - fixed)
 	return { stateWidth, durationWidth, countWidth, ageWidth, titleWidth }
 }
 

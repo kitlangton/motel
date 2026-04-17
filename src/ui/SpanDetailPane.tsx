@@ -45,12 +45,12 @@ export const SpanDetailPane = ({
 
 	return (
 		<box flexDirection="column" width={paneWidth} height={bodyLines + SPAN_DETAIL_HEADER_ROWS} overflow="hidden">
-			<box paddingLeft={1} paddingRight={1}>
+			<box paddingLeft={1} paddingRight={0}>
 				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
 			</box>
 			{span && trace ? (
 				<>
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<TextLine>
 							<span fg={colors.text}>{span.operationName}</span>
 						</TextLine>
@@ -65,7 +65,7 @@ export const SpanDetailPane = ({
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<SpanDetailView
 							span={span}
 							logs={logs}
@@ -76,12 +76,12 @@ export const SpanDetailPane = ({
 				</>
 			) : (
 				<>
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<TextLine><span fg={colors.muted}>—</span></TextLine>
 						<TextLine><span fg={colors.muted}>—</span></TextLine>
 					</box>
 					<Divider width={paneWidth} />
-					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
 						<PlainLine text="Select a span in the waterfall to view its detail." fg={colors.muted} />
 					</box>
 				</>

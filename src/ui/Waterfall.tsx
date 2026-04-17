@@ -189,35 +189,24 @@ export const getWaterfallLayout = (contentWidth: number, suffixWidth: number) =>
 
 export type WaterfallSuffixMetrics = {
 	readonly maxDurationWidth: number
-	readonly anyLogVisible: boolean
-	readonly maxLogWidth: number
 	readonly suffixWidth: number
 }
 
 /**
- * Compute a shared suffix (duration + optional log) width from whichever
- * spans are currently visible. Reserving the width once here keeps every
- * row right-aligned on the same column regardless of per-row content.
+ * Compute a shared suffix (duration) width from the visible viewport.
+ * Reserving the width once keeps every row's duration right-aligned on the
+ * same column regardless of per-row content. Log correlation lives in the
+ * span detail pane, not the row suffix.
  */
 export const getWaterfallSuffixMetrics = (
 	spans: readonly { readonly durationMs: number; readonly spanId: string }[],
-	spanLogCounts: ReadonlyMap<string, number>,
 ): WaterfallSuffixMetrics => {
 	let maxDurationWidth = 0
-	let anyLogVisible = false
-	let maxLogWidth = 0
 	for (const span of spans) {
 		const d = formatDuration(Math.max(0, span.durationMs)).length
 		if (d > maxDurationWidth) maxDurationWidth = d
-		const logCount = spanLogCounts.get(span.spanId) ?? 0
-		if (logCount > 0) {
-			anyLogVisible = true
-			const l = `${logCount}lg`.length
-			if (l > maxLogWidth) maxLogWidth = l
-		}
 	}
-	const suffixWidth = maxDurationWidth + (anyLogVisible ? 1 + maxLogWidth : 0)
-	return { maxDurationWidth, anyLogVisible, maxLogWidth, suffixWidth }
+	return { maxDurationWidth, suffixWidth: maxDurationWidth }
 }
 
 // Retained for tests: per-row view of the shared layout.
@@ -254,7 +243,6 @@ export const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[]
 
 const WaterfallRow = memo(({
 	span,
-	logCount,
 	trace,
 	index,
 	spans,
@@ -266,7 +254,6 @@ const WaterfallRow = memo(({
 	onSelect,
 }: {
 	span: TraceSpanItem
-	logCount: number
 	trace: TraceItem
 	index: number
 	spans: readonly TraceSpanItem[]
@@ -301,18 +288,11 @@ const WaterfallRow = memo(({
 
 	const durationFg = durationColor(span.durationMs)
 	const unitFg = colors.muted
-	const logFg = colors.defaultService
 
 	// Split the duration so the unit (s/ms) renders dimmer than the number.
-	// Pad on the LEFT of the number so the unit stays glued to the number
-	// while the whole duration cell stays right-aligned across rows.
 	const { number: durNumber, unit: durUnit } = splitDuration(Math.max(0, span.durationMs))
 	const durationCell = `${durNumber}${durUnit}`
 	const durationPad = " ".repeat(Math.max(0, suffixMetrics.maxDurationWidth - durationCell.length))
-	const logText = logCount > 0 ? `${logCount}lg`.padStart(suffixMetrics.maxLogWidth) : ""
-	// Reserve the log column on every row when any visible row has logs, so
-	// the whole suffix group stays aligned on the right edge of the pane.
-	const logSlot = suffixMetrics.anyLogVisible ? " ".repeat(suffixMetrics.maxLogWidth + 1) : ""
 
 	return (
 		<box height={1} onMouseDown={onSelect}>
@@ -329,11 +309,6 @@ const WaterfallRow = memo(({
 				<span>{durationPad}</span>
 				<span fg={durationFg}>{durNumber}</span>
 				<span fg={unitFg}>{durUnit}</span>
-				{suffixMetrics.anyLogVisible ? (
-					logText.length > 0
-						? <><span> </span><span fg={logFg}>{logText}</span></>
-						: <span>{logSlot}</span>
-				) : null}
 			</TextLine>
 		</box>
 	)
@@ -443,9 +418,9 @@ export const WaterfallTimeline = ({
 	const windowSpans = filteredSpans.slice(windowStart, windowStart + viewportSize)
 	const blankCount = Math.max(0, viewportSize - windowSpans.length)
 
-	// One shared suffix width, measured from the current viewport. Every row
-	// uses this so the duration column (and the optional log column) line up.
-	const suffixMetrics = getWaterfallSuffixMetrics(windowSpans, spanLogCounts)
+	// One shared suffix width, measured from the current viewport, so every
+	// row's duration cell lines up on the same right-edge column.
+	const suffixMetrics = getWaterfallSuffixMetrics(windowSpans)
 
 	return (
 		<box flexDirection="column">
@@ -456,7 +431,6 @@ export const WaterfallTimeline = ({
 					<WaterfallRow
 						key={`${trace.traceId}-${span.spanId}`}
 						span={span}
-						logCount={spanLogCounts.get(span.spanId) ?? 0}
 						trace={trace}
 						index={fullIndex}
 						spans={trace.spans}
