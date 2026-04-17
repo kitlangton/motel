@@ -34,6 +34,6 @@ export const config = {
 		traceFetchLimit: parsePositiveInt(process.env.MOTEL_OTEL_TRACE_LIMIT, 100),
 		logFetchLimit: parsePositiveInt(process.env.MOTEL_OTEL_LOG_LIMIT, 80),
 		retentionHours: parsePositiveInt(process.env.MOTEL_OTEL_RETENTION_HOURS, 168),
-		maxDbSizeMb: parsePositiveInt(process.env.MOTEL_OTEL_MAX_DB_SIZE_MB, 256),
+		maxDbSizeMb: parsePositiveInt(process.env.MOTEL_OTEL_MAX_DB_SIZE_MB, 1024),
 	},
 } as const

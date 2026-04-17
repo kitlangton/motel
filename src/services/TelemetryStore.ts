@@ -612,41 +612,73 @@ export const TelemetryStoreLive = Layer.effect(
 			const now = yield* Clock.currentTimeMillis
 
 			yield* Effect.sync(() => {
-				let deletedData = false
-				// Time-based retention
 				const cutoff = now - config.otel.retentionHours * 60 * 60 * 1000
-				const deletedSpans = db.query(`DELETE FROM spans WHERE start_time_ms < ?`).run(cutoff) as { changes?: number }
-				const deletedLogs = db.query(`DELETE FROM logs WHERE timestamp_ms < ?`).run(cutoff) as { changes?: number }
-				deletedData = (deletedSpans.changes ?? 0) > 0 || (deletedLogs.changes ?? 0) > 0
 
-				// Size-based retention: if actual data exceeds max, delete oldest 20% of rows.
-				// Use (page_count - freelist_count) to ignore freed-but-not-vacuumed pages;
-				// otherwise a large freelist triggers a deletion death spiral.
+				// Evict at TRACE granularity so we never leave a trace half-gutted
+				// (previous logic deleted oldest 20% of spans, which happily sliced
+				// across traces and corrupted the summary rebuild). Running traces
+				// are protected — only `active_span_count = 0` summaries are in
+				// scope for eviction.
+				const toEvict = new Set<string>()
+
+				// Time-based: completed traces whose last span ended before cutoff.
+				const timeExpired = db.query(
+					`SELECT trace_id FROM trace_summaries WHERE active_span_count = 0 AND ended_at_ms > 0 AND ended_at_ms < ?`,
+				).all(cutoff) as readonly { trace_id: string }[]
+				for (const row of timeExpired) toEvict.add(row.trace_id)
+
+				// Size-based: if actual data exceeds cap, drop oldest 20% of the
+				// remaining completed traces. `(page_count - freelist_count)`
+				// ignores freed-but-not-vacuumed pages so a large freelist doesn't
+				// trigger a deletion death spiral.
 				const pageCount = (db.query(`PRAGMA page_count`).get() as { page_count: number }).page_count
 				const freePages = (db.query(`PRAGMA freelist_count`).get() as { freelist_count: number }).freelist_count
 				const pageSize = (db.query(`PRAGMA page_size`).get() as { page_size: number }).page_size
 				const dbSize = (pageCount - freePages) * pageSize
 				if (dbSize > maxDbSizeBytes) {
-					const spanCount = (db.query(`SELECT COUNT(*) AS c FROM spans`).get() as { c: number }).c
-					const logCount = (db.query(`SELECT COUNT(*) AS c FROM logs`).get() as { c: number }).c
-					const spanCutCount = Math.max(1, Math.floor(spanCount * 0.2))
-					const logCutCount = Math.max(1, Math.floor(logCount * 0.2))
-					db.query(`DELETE FROM spans WHERE rowid IN (SELECT rowid FROM spans ORDER BY start_time_ms ASC LIMIT ?)`).run(spanCutCount)
-					db.query(`DELETE FROM logs WHERE rowid IN (SELECT rowid FROM logs ORDER BY timestamp_ms ASC LIMIT ?)`).run(logCutCount)
-					deletedData = true
+					const completedCount = (db.query(
+						`SELECT COUNT(*) AS c FROM trace_summaries WHERE active_span_count = 0`,
+					).get() as { c: number }).c
+					const traceCutCount = Math.max(1, Math.floor(completedCount * 0.2))
+					const oldest = db.query(
+						`SELECT trace_id FROM trace_summaries WHERE active_span_count = 0 ORDER BY started_at_ms ASC LIMIT ?`,
+					).all(traceCutCount) as readonly { trace_id: string }[]
+					// Set.add dedupes overlap with the time-expired batch above.
+					for (const row of oldest) toEvict.add(row.trace_id)
 				}
 
-				if (deletedData) {
-					db.query(`DELETE FROM span_attributes WHERE NOT EXISTS (SELECT 1 FROM spans WHERE spans.trace_id = span_attributes.trace_id AND spans.span_id = span_attributes.span_id)`).run()
-					db.query(`DELETE FROM log_attributes WHERE NOT EXISTS (SELECT 1 FROM logs WHERE logs.id = log_attributes.log_id)`).run()
+				// Always prune orphan logs (no trace_id) by timestamp — they're
+				// not covered by trace eviction.
+				db.query(`DELETE FROM logs WHERE trace_id IS NULL AND timestamp_ms < ?`).run(cutoff)
+
+				if (toEvict.size === 0) return
+
+				// Batch the trace-id list so the IN placeholders stay under
+				// SQLite's default limit (~999). Each batch wipes every row
+				// reachable from those trace_ids across the cascade tables.
+				const traceIds = Array.from(toEvict)
+				const BATCH_SIZE = 500
+				for (let offset = 0; offset < traceIds.length; offset += BATCH_SIZE) {
+					const batch = traceIds.slice(offset, offset + BATCH_SIZE)
+					const placeholders = batch.map(() => "?").join(",")
+					db.query(`DELETE FROM span_attributes WHERE trace_id IN (${placeholders})`).run(...batch)
 					try {
-						db.query(`DELETE FROM span_operation_fts WHERE NOT EXISTS (SELECT 1 FROM spans WHERE spans.trace_id = span_operation_fts.trace_id AND spans.span_id = span_operation_fts.span_id)`).run()
-						db.query(`DELETE FROM log_body_fts WHERE NOT EXISTS (SELECT 1 FROM logs WHERE logs.id = CAST(log_body_fts.log_id AS INTEGER))`).run()
+						db.query(`DELETE FROM span_operation_fts WHERE trace_id IN (${placeholders})`).run(...batch)
 					} catch {
-						// FTS tables may not exist.
+						// FTS table may not exist on old DBs.
 					}
-					db.query(`DELETE FROM trace_summaries`).run()
-					rebuildTraceSummaries.run()
+					db.query(`DELETE FROM spans WHERE trace_id IN (${placeholders})`).run(...batch)
+					db.query(`DELETE FROM logs WHERE trace_id IN (${placeholders})`).run(...batch)
+					db.query(`DELETE FROM trace_summaries WHERE trace_id IN (${placeholders})`).run(...batch)
+				}
+
+				// Log-side orphans (log_attributes + FTS) are keyed by log.id,
+				// so prune what no longer has a parent log row.
+				db.query(`DELETE FROM log_attributes WHERE NOT EXISTS (SELECT 1 FROM logs WHERE logs.id = log_attributes.log_id)`).run()
+				try {
+					db.query(`DELETE FROM log_body_fts WHERE NOT EXISTS (SELECT 1 FROM logs WHERE logs.id = CAST(log_body_fts.log_id AS INTEGER))`).run()
+				} catch {
+					// FTS table may not exist on old DBs.
 				}
 			})
 		})

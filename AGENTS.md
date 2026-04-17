@@ -116,7 +116,7 @@
 - `MOTEL_OTEL_TRACE_LIMIT`: defaults to `100`
 - `MOTEL_OTEL_LOG_LIMIT`: defaults to `80`
 - `MOTEL_OTEL_RETENTION_HOURS`: defaults to `168` (7d)
-- `MOTEL_OTEL_MAX_DB_SIZE_MB`: defaults to `256` (size-based retention cap)
+- `MOTEL_OTEL_MAX_DB_SIZE_MB`: defaults to `1024` (size-based retention cap)
 
 ## TUI Keys
 - `?`: toggle shortcut help
