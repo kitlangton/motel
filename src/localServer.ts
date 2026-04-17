@@ -656,6 +656,13 @@ export const startLocalServer = async () => {
 	server = Bun.serve({
 		hostname: config.otel.host,
 		port: config.otel.port,
+		// SO_REUSEPORT: lets a fresh daemon re-bind the port while the
+		// previous process's socket is still draining in TIME_WAIT. Without
+		// this, restarting the daemon within ~60s of an unclean shutdown
+		// fails with EADDRINUSE even though nothing is actually listening.
+		// Safe because the supervisor in src/daemon.ts owns uniqueness via
+		// a file lock + /api/health probe, not OS-level exclusivity.
+		reusePort: true,
 		fetch(request) {
 			return serveWebUi(request, handler)
 		},

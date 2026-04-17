@@ -45,7 +45,7 @@
   },
   "scripts": {
     "clear-motel-debug": "bun run skills/motel-debug/scripts/clear-motel-debug.ts",
-    "dev": "bun run src/motel.ts tui",
+    "dev": "MOTEL_OTEL_ENABLED=true bun run src/motel.ts tui",
     "start": "bun run src/motel.ts tui",
     "daemon": "bun run src/motel.ts daemon",
     "status": "bun run src/motel.ts status",
