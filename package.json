@@ -71,6 +71,7 @@
     "prepublishOnly": "bun run web:build"
   },
   "devDependencies": {
+    "@effect/language-service": "^0.85.1",
     "@types/bun": "^1.3.12",
     "@types/react": "^19.2.14",
     "typescript": "^6.0.2"

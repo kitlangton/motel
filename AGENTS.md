@@ -28,6 +28,11 @@
 - Build the web UI: `bun run web:build`
 - Dev the web UI (with hot reload): `bun run web:dev`
 - Typecheck: `bun run typecheck`
+- Effect LSP diagnostics over the whole project: `bunx effect-language-service diagnostics --project tsconfig.json --format text`
+- Effect LSP interactive setup wizard: `bunx effect-language-service setup`
+
+## Effect LSP
+The repo is wired up with `@effect/language-service` as a `tsconfig.json` `plugins` entry. Editors that pick up the TypeScript workspace plugin (Zed, VSCode, Cursor, NVim via vtsls) will surface Effect-specific diagnostics, quick fixes, and refactors inline. In Zed this requires selecting the workspace TypeScript version — it does so automatically when `node_modules/typescript` is present.
 
 ## Verification
 - The built-in verification step is `bun run typecheck`.
