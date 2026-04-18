@@ -21,7 +21,6 @@ import {
 	initialServiceLogState,
 	initialTraceDetailState,
 	invalidateAiCallDetailCache,
-	invalidateFacetCaches,
 	loadFilteredTraceSummaries,
 	loadRecentTraceSummaries,
 	loadServiceLogs,
@@ -166,7 +165,6 @@ export const useTraceScreenData = () => {
 		serviceLogCacheRef.current.clear()
 		traceDetailInflightRef.current.clear()
 		traceLogInflightRef.current.clear()
-		invalidateFacetCaches()
 		invalidateAiCallDetailCache()
 	}, [refreshNonce])
 
@@ -176,7 +174,7 @@ export const useTraceScreenData = () => {
 	useEffect(() => {
 		if (!selectedTraceService) return
 		void ensureTraceAttributeKeys(selectedTraceService).catch(() => {})
-	}, [selectedTraceService, refreshNonce])
+	}, [selectedTraceService])
 
 	useEffect(() => {
 		let cancelled = false

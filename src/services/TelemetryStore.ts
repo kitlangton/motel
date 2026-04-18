@@ -1666,7 +1666,6 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 		})
 
 		const listFacets = Effect.fn("motel/TelemetryStore.listFacets")(function* (input: FacetSearch) {
-
 			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
 			const limit = input.limit ?? 20
 
@@ -1756,21 +1755,26 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 						// FACET_VALUE_MAX_LEN. For opencode this hides `ai.prompt`,
 						// `ai.prompt.messages`, and `ai.prompt.tools` — which are 1-6MB text
 						// blobs that you'd never want to filter by exact match anyway. The
-						// WHERE clause lets SQLite skip reading those pages from disk, taking
-						// the picker open time from ~1.2s to ~370ms on a 2GB database.
+						// WHERE clause lets SQLite skip reading those pages from disk. We also
+						// dedupe to one (trace, key, value) row before grouping so repeated
+						// span-level duplicates don't blow up the temp B-trees used for the
+						// picker ranking query.
 						const params: Array<string | number> = [FACET_VALUE_MAX_LEN, cutoff]
 						if (input.serviceName) params.push(input.serviceName)
 						params.push(limit)
 						const rows = db.query(`
-							SELECT sa.key AS value,
-							       COUNT(DISTINCT sa.trace_id) AS count,
-							       COUNT(DISTINCT sa.value) AS distinct_values
-							FROM span_attributes sa
-							JOIN spans s ON s.trace_id = sa.trace_id AND s.span_id = sa.span_id
-							WHERE LENGTH(sa.value) < ?
-							  AND s.start_time_ms >= ?
-							${input.serviceName ? "AND s.service_name = ?" : ""}
-							GROUP BY sa.key
+							SELECT scoped.key AS value,
+							       COUNT(DISTINCT scoped.trace_id) AS count,
+							       COUNT(DISTINCT scoped.value) AS distinct_values
+							FROM (
+								SELECT DISTINCT sa.trace_id, sa.key, sa.value
+								FROM span_attributes sa
+								JOIN trace_summaries ts ON ts.trace_id = sa.trace_id
+								WHERE LENGTH(sa.value) < ?
+								  AND ts.started_at_ms >= ?
+								  ${input.serviceName ? "AND ts.service_name = ?" : ""}
+							) AS scoped
+							GROUP BY scoped.key
 							ORDER BY (CASE WHEN distinct_values = 1 THEN 1 ELSE 0 END) ASC,
 							         distinct_values DESC,
 							         count DESC,
