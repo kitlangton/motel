@@ -1,11 +1,13 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
+import { gunzipSync } from "node:zlib"
 import { Effect, Layer } from "effect"
 import { config, parsePositiveInt } from "./config.js"
 import { HttpApiBuilder, HttpApiScalar } from "effect/unstable/httpapi"
 import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
+import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import * as HttpStaticServer from "effect/unstable/http/HttpStaticServer"
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer"
 import { MotelHttpApi } from "./httpApi.js"
@@ -70,6 +72,23 @@ const parseLookbackMinutes = (value: string | null, fallback: number) => {
 }
 
 const parseBoundedLookbackMinutes = (value: string | null, fallback: number, max: number) => clamp(parseLookbackMinutes(value, fallback), 1, max)
+
+// OTLP/HTTP exporters often send gzip-compressed payloads, so every
+// ingest handler goes through this helper before touching the worker.
+const parseJsonBody = (request: HttpServerRequest.HttpServerRequest): Effect.Effect<unknown, Error> =>
+	Effect.gen(function*() {
+		const arrayBuffer = yield* request.arrayBuffer
+		const buffer = Buffer.from(arrayBuffer)
+		const encoding = request.headers["content-encoding"]
+		const decompressed = encoding === "gzip" ? gunzipSync(buffer) : buffer
+		return JSON.parse(decompressed.toString("utf-8"))
+	}).pipe(
+		Effect.catch((error) =>
+			Effect.fail(
+				new Error(`Failed to parse request body: ${error instanceof Error ? error.message : String(error)}`),
+			),
+		),
+	)
 
 const attributeFiltersFromQuery = (url: URL) =>
 	attributeFiltersFromEntries(url.searchParams.entries())
@@ -294,7 +313,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			// are fast enough that IPC overhead isn't worth paying.
 			.handleRaw("ingestTraces", ({ request }) =>
 				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
+					Effect.flatMap(parseJsonBody(request), (payload) =>
 						Effect.map(
 							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
 							(result) => jsonResponse(result),
@@ -304,7 +323,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			)
 			.handleRaw("ingestLogs", ({ request }) =>
 				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
+					Effect.flatMap(parseJsonBody(request), (payload) =>
 						Effect.map(
 							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
 							(result) => jsonResponse(result),
