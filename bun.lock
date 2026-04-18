@@ -7,7 +7,7 @@
       "dependencies": {
         "@effect/atom-react": "^4.0.0-beta.49",
         "@effect/opentelemetry": "^4.0.0-beta.49",
-        "@effect/platform-bun": "^4.0.0-beta.49",
+        "@effect/platform-bun": "^4.0.0-beta.50",
         "@opentelemetry/api": "^1.9.0",
         "@opentelemetry/exporter-logs-otlp-http": "^0.214.0",
         "@opentelemetry/exporter-trace-otlp-http": "^0.211.0",
@@ -59,9 +59,9 @@
 
     "@effect/opentelemetry": ["@effect/opentelemetry@4.0.0-beta.49", "", { "peerDependencies": { "@opentelemetry/api": "^1.9", "@opentelemetry/resources": "^2.0.0", "@opentelemetry/sdk-logs": ">=0.203.0 <0.300.0", "@opentelemetry/sdk-metrics": "^2.0.0", "@opentelemetry/sdk-trace-base": "^2.0.0", "@opentelemetry/sdk-trace-node": "^2.0.0", "@opentelemetry/sdk-trace-web": "^2.0.0", "@opentelemetry/semantic-conventions": "^1.33.0", "effect": "^4.0.0-beta.49" }, "optionalPeers": ["@opentelemetry/api", "@opentelemetry/resources", "@opentelemetry/sdk-logs", "@opentelemetry/sdk-metrics", "@opentelemetry/sdk-trace-base", "@opentelemetry/sdk-trace-node", "@opentelemetry/sdk-trace-web"] }, "sha512-u8DxpROcwtIbr+7hTf/HF1HLMbDYciQT2K+J7YD6ky5gyXQR4z557uq5AsZKDoHFtOnTepNlsGDpzU633YwwUg=="],
 
-    "@effect/platform-bun": ["@effect/platform-bun@4.0.0-beta.49", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.49" }, "peerDependencies": { "effect": "^4.0.0-beta.49" } }, "sha512-di/ycC0I5xtEnm4VvRx5RAQvvmmdfrZ965XEv2D4ZOdrC+YTHzPLjh7pWL92YlbEDQMZiMLpAgTqHU8KDim/Mg=="],
+    "@effect/platform-bun": ["@effect/platform-bun@4.0.0-beta.50", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.50" }, "peerDependencies": { "effect": "^4.0.0-beta.50" } }, "sha512-KnDleO9PMr++HoLl/VmzR3hNcOG3Hz5+xAtO5ec5SzN7QwedPbPWBZYR88tv5GTeKLgBvPTAjoTt2kbbNh5Jzw=="],
 
-    "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-beta.49", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.20.0" }, "peerDependencies": { "effect": "^4.0.0-beta.49" } }, "sha512-7KUlx7r4QuHHW8UWRGXsUEW0IYZMalLwG5TXbYz73Rz+aPfG/GqrhTzHwgvzKRX0EyMlEKUZ9KcsnIbiWKMzAg=="],
+    "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-beta.50", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.20.0" }, "peerDependencies": { "effect": "^4.0.0-beta.50" } }, "sha512-aFHifdtDae0ih4d2m6j7cdEWLZcn/g8nmxn1XU2PwLezb5oAyu5ljibayYRIvJNTbmJXRk9sKjbl2NC0xQMTYg=="],
 
     "@emnapi/core": ["@emnapi/core@1.9.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.1", "tslib": "^2.4.0" } }, "sha512-UC+ZhH3XtczQYfOlu3lNEkdW/p4dsJ1r/bP7H8+rhao3TTTMO1ATq/4DdIi23XuGoFY+Cz0JmCbdVl0hz9jZcA=="],
 

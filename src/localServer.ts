@@ -1,17 +1,25 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
-import { Effect, Layer, Context } from "effect"
-import { config, parsePositiveInt, resolveOtelUrl } from "./config.js"
+import { Effect, Layer } from "effect"
+import { config, parsePositiveInt } from "./config.js"
 import { HttpApiBuilder, HttpApiScalar } from "effect/unstable/httpapi"
+import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
-import * as HttpServer from "effect/unstable/http/HttpServer"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
+import * as HttpStaticServer from "effect/unstable/http/HttpStaticServer"
+import * as BunHttpServer from "@effect/platform-bun/BunHttpServer"
 import { MotelHttpApi } from "./httpApi.js"
 import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries, ATTRIBUTE_FILTER_PREFIX, ATTRIBUTE_CONTAINS_PREFIX } from "./queryFilters.js"
-import { MOTEL_SERVICE_ID, MOTEL_VERSION, writeRegistryEntry } from "./registry.js"
+import { MOTEL_SERVICE_ID, MOTEL_VERSION, removeRegistryEntry, writeRegistryEntry } from "./registry.js"
 import { TelemetryStore, TelemetryStoreLive } from "./services/TelemetryStore.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
 import { lifecycleLabel } from "./ui/format.js"
+
+// Set by the RegistryLayer acquisition once the Bun socket has bound.
+// Both /api/health and the registry entry read from here so they agree
+// on a single server-start timestamp, and the value reflects actual
+// listen time rather than module-evaluation time.
+let serverStartedAt: string = new Date(0).toISOString()
 
 const TRACE_DEFAULT_LIMIT = 20
 const TRACE_MAX_LIMIT = 100
@@ -23,16 +31,6 @@ const LOG_DEFAULT_LIMIT = 100
 const LOG_MAX_LIMIT = 500
 const LOG_DEFAULT_LOOKBACK = 60
 const LOG_MAX_LOOKBACK = 24 * 60
-
-let server: ReturnType<typeof Bun.serve> | null = null
-let disposeWebHandler: (() => Promise<void>) | null = null
-let startedAt: string | null = null
-
-const resolveBoundUrl = () => {
-	if (!server) return config.otel.queryUrl
-	const host = server.hostname === "0.0.0.0" || server.hostname === "::" ? "127.0.0.1" : server.hostname
-	return `http://${host}:${server.port}`
-}
 
 const jsonResponse = (value: unknown, status = 200) => HttpServerResponse.jsonUnsafe(value, { status })
 const textResponse = (value: string) => HttpServerResponse.text(value)
@@ -284,9 +282,9 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					service: MOTEL_SERVICE_ID,
 					databasePath: config.otel.databasePath,
 					pid: process.pid,
-					url: resolveBoundUrl(),
+					url: config.otel.baseUrl,
 					workdir: process.cwd(),
-					startedAt: startedAt ?? new Date(0).toISOString(),
+					startedAt: serverStartedAt,
 					version: MOTEL_VERSION,
 				}),
 			)
@@ -587,126 +585,88 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			),
 )
 
-const ApiLive = Layer.provideMerge(
-	HttpApiBuilder.layer(MotelHttpApi, { openapiPath: "/openapi.json" }).pipe(
-		Layer.provide(TelemetryGroupLive),
-		Layer.provide(HttpApiScalar.layer(MotelHttpApi, { scalar: { forceDarkModeState: "dark", showOperationId: true } })),
-		Layer.provide(HttpServer.layerServices),
-	),
-	TelemetryStoreLive,
+// ---------------------------------------------------------------------------
+// App layer: HTTP router + static SPA + telemetry store
+// ---------------------------------------------------------------------------
+
+// API routes come from the Effect HttpApi definition. Everything under
+// /api/*, /v1/*, /openapi.json, /docs is handled here.
+const ApiLayer = HttpApiBuilder.layer(MotelHttpApi, { openapiPath: "/openapi.json" }).pipe(
+	Layer.provide(TelemetryGroupLive),
+	Layer.provide(HttpApiScalar.layer(MotelHttpApi, { scalar: { forceDarkModeState: "dark", showOperationId: true } })),
 )
 
-// ---------------------------------------------------------------------------
-// Static file serving for the web UI
-// ---------------------------------------------------------------------------
-
+// Web UI: Vite-built SPA served from web/dist. HttpStaticServer.layer
+// handles GET /*, filesystem lookup under `root`, and SPA fallback to
+// index.html for unknown paths — replacing the hand-rolled serveWebUi
+// wrapper that previously lived inline with Bun.serve. The API routes
+// above take precedence because HttpApi registers specific paths that
+// the router matches before falling through to the /* catch-all.
 const WEB_DIST_DIR = path.resolve(import.meta.dir, "../web/dist")
-// Only cache `true` — a `false` result is rechecked so a later `web:build` is picked up
-let webUiAvailable = false
+const StaticLayer = HttpStaticServer.layer({
+	root: WEB_DIST_DIR,
+	spa: true,
+})
 
-const isWebUiAvailable = async (): Promise<boolean> => {
-	if (webUiAvailable) return true
-	try {
-		webUiAvailable = await Bun.file(path.join(WEB_DIST_DIR, "index.html")).exists()
-	} catch {
-		/* ignore */
-	}
-	return webUiAvailable
-}
-
-/** Routes that must always go through the Effect API handler */
-const isStrictApiRoute = (pathname: string) =>
-	pathname.startsWith("/api/") ||
-	pathname.startsWith("/v1/") ||
-	pathname === "/openapi.json" ||
-	pathname === "/docs"
-
-const serveWebUi = async (request: Request, apiHandler: (req: Request) => Promise<Response>): Promise<Response> => {
-	const url = new URL(request.url)
-	const pathname = url.pathname
-
-	// Strict API routes always go through the Effect handler
-	if (isStrictApiRoute(pathname)) return apiHandler(request)
-
-	// Only serve web UI if built
-	if (!(await isWebUiAvailable())) return apiHandler(request)
-
-	// Try to serve a static file from web/dist/ (hashed assets, favicon, etc.)
-	if (pathname.startsWith("/assets/") || (pathname !== "/" && pathname.includes("."))) {
-		const resolved = path.resolve(WEB_DIST_DIR, pathname.slice(1))
-		if (resolved.startsWith(WEB_DIST_DIR) && await Bun.file(resolved).exists()) {
-			return new Response(Bun.file(resolved))
-		}
-	}
-
-	// SPA fallback: serve index.html for / and all client routes
-	return new Response(Bun.file(path.join(WEB_DIST_DIR, "index.html")), {
-		headers: { "content-type": "text/html; charset=utf-8" },
-	})
-}
+// Registry-entry writer as a scoped acquisition. The entry is published
+// after BunHttpServer.layer binds the socket (scope acquisition order)
+// and removed on scope release, so a bind failure never leaves a zombie
+// entry and a graceful shutdown cleans up alongside the server stop —
+// both in the same finalizer chain managed by Layer.launch.
+const RegistryLayer = Layer.effectDiscard(
+	Effect.acquireRelease(
+		Effect.sync(() => {
+			serverStartedAt = new Date().toISOString()
+			try {
+				writeRegistryEntry({
+					pid: process.pid,
+					url: config.otel.baseUrl,
+					workdir: process.cwd(),
+					startedAt: serverStartedAt,
+					version: MOTEL_VERSION,
+					databasePath: config.otel.databasePath,
+				})
+			} catch (err) {
+				console.warn(`motel: failed to write registry entry: ${(err as Error).message}`)
+			}
+		}),
+		() => Effect.sync(() => removeRegistryEntry(process.pid)),
+	),
+)
 
 // ---------------------------------------------------------------------------
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
-export const startLocalServer = async () => {
-	if (server) return server
-	const { handler, dispose } = HttpRouter.toWebHandler(ApiLive, { disableLogger: true })
-	disposeWebHandler = dispose
-	server = Bun.serve({
-		hostname: config.otel.host,
+/**
+ * Launchable server layer. Composes the API + static UI + store + registry,
+ * wraps the whole stack in HttpMiddleware.tracer (per-request OTel spans
+ * with http.method / url / status / user-agent attributes), and binds the
+ * socket via @effect/platform-bun's BunHttpServer. Use from server.ts:
+ *
+ *   await Effect.runPromise(Layer.launch(ServerLive))
+ *
+ * Socket lifecycle, graceful shutdown, and error propagation are managed
+ * by the BunHttpServer layer's Scope — no hand-rolled start/stop plumbing.
+ * `reusePort: true` is retained as defense-in-depth against TIME_WAIT
+ * rebind conflicts (the registry-based adoption path in daemon.ts is the
+ * primary protection, but this covers a raw `bun src/server.ts` restart).
+ */
+export const ServerLive = HttpRouter.serve(
+	Layer.mergeAll(ApiLayer, StaticLayer, RegistryLayer),
+	{ middleware: HttpMiddleware.tracer },
+).pipe(
+	// OTLP ingest paths are NOT traced by the middleware, otherwise
+	// MOTEL_OTEL_ENABLED creates a feedback loop: every outbound span
+	// POSTs to /v1/traces, the tracer emits a span for that POST, which
+	// POSTs again on the next flush. This also shaves ~1 KB of header
+	// attributes off every ingest request that would have been written
+	// to the spans table as noise.
+	Layer.provide(HttpMiddleware.layerTracerDisabledForUrls(["/v1/traces", "/v1/logs"])),
+	Layer.provideMerge(TelemetryStoreLive),
+	Layer.provideMerge(BunHttpServer.layer({
 		port: config.otel.port,
-		// SO_REUSEPORT: lets a fresh daemon re-bind the port while the
-		// previous process's socket is still draining in TIME_WAIT. Without
-		// this, restarting the daemon within ~60s of an unclean shutdown
-		// fails with EADDRINUSE even though nothing is actually listening.
-		// Safe because the supervisor in src/daemon.ts owns uniqueness via
-		// a file lock + /api/health probe, not OS-level exclusivity.
+		hostname: config.otel.host,
 		reusePort: true,
-		fetch(request) {
-			return serveWebUi(request, handler)
-		},
-	})
-	startedAt = new Date().toISOString()
-	try {
-		writeRegistryEntry({
-			pid: process.pid,
-			url: resolveBoundUrl(),
-			workdir: process.cwd(),
-			startedAt,
-			version: MOTEL_VERSION,
-			// Published so the supervisor can do a full
-			// workdir + databasePath mismatch check off the
-			// registry alone, with no HTTP round-trip.
-			databasePath: config.otel.databasePath,
-		})
-	} catch (err) {
-		console.warn(`motel: failed to write registry entry: ${(err as Error).message}`)
-	}
-	return server
-}
-
-export const ensureLocalServer = async () => {
-	if (server) return server
-	try {
-		const response = await fetch(resolveOtelUrl("/api/health"), { signal: AbortSignal.timeout(250) })
-		if (response.ok) return null
-	} catch {
-		// Start local server below.
-	}
-	return await startLocalServer()
-}
-
-export const stopLocalServer = () => {
-	server?.stop(true)
-	server = null
-	startedAt = null
-
-	const dispose = disposeWebHandler
-	disposeWebHandler = null
-	if (dispose) {
-		void dispose().catch((err) => {
-			console.warn(`motel: failed to dispose web handler: ${(err as Error).message}`)
-		})
-	}
-}
+	})),
+)

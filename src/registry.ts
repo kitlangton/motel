@@ -28,19 +28,6 @@ export type RegistryEntry = {
 
 const entryPath = (pid: number) => path.join(registryDir(), `${pid}.json`)
 
-let currentEntryPath: string | null = null
-let signalHandlersRegistered = false
-
-const cleanup = () => {
-	if (!currentEntryPath) return
-	try {
-		fs.unlinkSync(currentEntryPath)
-	} catch {
-		// already gone — ignore
-	}
-	currentEntryPath = null
-}
-
 export const isAlive = (pid: number): boolean => {
 	try {
 		process.kill(pid, 0)
@@ -80,15 +67,23 @@ export const writeRegistryEntry = (entry: RegistryEntry) => {
 	fs.mkdirSync(registryDir(), { recursive: true })
 	const file = entryPath(entry.pid)
 	fs.writeFileSync(file, JSON.stringify(entry, null, 2), "utf8")
-	currentEntryPath = file
-	if (!signalHandlersRegistered) {
-		signalHandlersRegistered = true
-		process.on("exit", cleanup)
-		for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-			process.on(sig, () => {
-				cleanup()
-				process.exit(0)
-			})
-		}
+}
+
+/**
+ * Remove this daemon's registry entry. Intended to be called from a
+ * Layer release so the scope-managed server shutdown removes the entry
+ * in the same finalizer chain that stops the socket. Historically this
+ * was done via ad-hoc process-signal handlers installed here that ran
+ * `process.exit(0)` — which races with the Effect runtime's own SIGINT
+ * handling and short-circuits the Bun server's graceful stop. The
+ * server (via BunRuntime.runMain) now owns signal handling; registry
+ * cleanup rides along on scope release.
+ */
+export const removeRegistryEntry = (pid: number) => {
+	try {
+		fs.unlinkSync(entryPath(pid))
+	} catch {
+		// Already gone — another cleanup path won the race, or the entry
+		// was never written.
 	}
 }
