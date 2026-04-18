@@ -405,9 +405,9 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 
 			const logFd = await openLogFile()
 			try {
-				const proc = Bun.spawn({
-					cmd: [process.execPath, "run", "src/server.ts"],
-					cwd: config.repoRoot,
+			const proc = Bun.spawn({
+				cmd: [process.execPath, "run", path.join(config.repoRoot, "src/server.ts")],
+				cwd: process.cwd(),
 					detached: true,
 					env: {
 						...process.env,
