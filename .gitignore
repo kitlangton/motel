@@ -4,3 +4,4 @@ node_modules/
 .otel-data/
 .motel-data/
 web/dist/
+.direnv
