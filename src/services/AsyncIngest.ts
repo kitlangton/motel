@@ -20,7 +20,7 @@
  */
 
 import * as BunWorker from "@effect/platform-bun/BunWorker"
-import { Context, Duration, Effect, Layer, RcRef, Scope } from "effect"
+import { Context, Effect, Fiber, Layer } from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -54,16 +54,15 @@ const makeClient = RpcClient.make(IngestRpcs)
 export const AsyncIngestLive = Layer.effect(
 	AsyncIngest,
 	Effect.gen(function* () {
-		const clientRef = yield* RcRef.make({
-			acquire: Effect.gen(function* () {
-				const protocol = yield* Layer.build(WorkerProtocol)
-				return yield* makeClient.pipe(Effect.provideContext(protocol))
-			}),
-			idleTimeToLive: Duration.minutes(5),
-		})
+		const client = yield* Effect.gen(function* () {
+			const protocol = yield* Layer.build(WorkerProtocol)
+			return yield* makeClient.pipe(Effect.provideContext(protocol))
+		}).pipe(Effect.forkScoped({ startImmediately: true }))
+
 		const withClient = <A, E, R>(
 			f: (client: Effect.Success<typeof makeClient>) => Effect.Effect<A, E, R>,
-		) => RcRef.get(clientRef).pipe(Effect.flatMap(f), Effect.scoped)
+		) => Fiber.join(client).pipe(Effect.flatMap(f))
+
 		return {
 			ingestTraces: (input, options) =>
 				withClient((client) => client.ingestTraces(input, options)),
