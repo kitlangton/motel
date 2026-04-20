@@ -20,7 +20,7 @@
  */
 
 import * as BunWorker from "@effect/platform-bun/BunWorker"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Effect, Fiber, Layer } from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -43,26 +43,31 @@ export class AsyncIngest extends Context.Service<
 const WorkerProtocol = RpcClient.layerProtocolWorker({ size: 1 }).pipe(
 	Layer.provide(RpcSerialization.layerMsgPack),
 	Layer.provide(
-		BunWorker.layer(() => new Worker(new URL("./telemetryWorker.ts", import.meta.url))),
+		BunWorker.layer(
+			() => new Worker(new URL("./telemetryWorker.ts", import.meta.url)),
+		),
 	),
 )
 
+const makeClient = RpcClient.make(IngestRpcs)
+
 export const AsyncIngestLive = Layer.effect(
 	AsyncIngest,
-	Effect.gen(function*() {
-		const scope = yield* Scope.Scope
-		// Keep daemon startup cheap: creating the RPC client here would eagerly
-		// spawn the worker and make /api/health wait on the worker's SQLite
-		// bootstrap. Cache a lazy initializer instead so the worker only starts
-		// on the first ingest request, but is still shared thereafter.
-		const getClient = yield* RpcClient.make(IngestRpcs).pipe(
-			Effect.provide(WorkerProtocol),
-			Effect.cached,
-		)
-		const withScope = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.provideService(effect, Scope.Scope, scope)
+	Effect.gen(function* () {
+		const client = yield* Effect.gen(function* () {
+			const protocol = yield* Layer.build(WorkerProtocol)
+			return yield* makeClient.pipe(Effect.provideContext(protocol))
+		}).pipe(Effect.forkScoped({ startImmediately: true }))
+
+		const withClient = <A, E, R>(
+			f: (client: Effect.Success<typeof makeClient>) => Effect.Effect<A, E, R>,
+		) => Fiber.join(client).pipe(Effect.flatMap(f))
+
 		return {
-			ingestTraces: (input, options) => Effect.flatMap(withScope(getClient), (client) => client.ingestTraces(input, options)),
-			ingestLogs: (input, options) => Effect.flatMap(withScope(getClient), (client) => client.ingestLogs(input, options)),
+			ingestTraces: (input, options) =>
+				withClient((client) => client.ingestTraces(input, options)),
+			ingestLogs: (input, options) =>
+				withClient((client) => client.ingestLogs(input, options)),
 		}
 	}),
 )
