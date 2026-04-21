@@ -9,12 +9,30 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import * as HttpStaticServer from "effect/unstable/http/HttpStaticServer"
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer"
 import { MotelHttpApi } from "./httpApi.js"
-import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries } from "./queryFilters.js"
-import { MOTEL_SERVICE_ID, MOTEL_VERSION, removeRegistryEntry, writeRegistryEntry } from "./registry.js"
+import {
+	attributeFiltersFromEntries,
+	attributeContainsFiltersFromEntries,
+} from "./queryFilters.js"
+import {
+	MOTEL_SERVICE_ID,
+	MOTEL_VERSION,
+	removeRegistryEntry,
+	writeRegistryEntry,
+} from "./registry.js"
 import { AsyncIngest, AsyncIngestLive } from "./services/AsyncIngest.js"
-import { LogQueryService, LogQueryServiceLive } from "./services/LogQueryService.js"
-import { TelemetryStore, TelemetryStoreLive, TelemetryStoreReadonlyLive } from "./services/TelemetryStore.js"
-import { TraceQueryService, TraceQueryServiceLive } from "./services/TraceQueryService.js"
+import {
+	LogQueryService,
+	LogQueryServiceLive,
+} from "./services/LogQueryService.js"
+import {
+	TelemetryStore,
+	TelemetryStoreLive,
+	TelemetryStoreReadonlyLive,
+} from "./services/TelemetryStore.js"
+import {
+	TraceQueryService,
+	TraceQueryServiceLive,
+} from "./services/TraceQueryService.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
 import { lifecycleLabel } from "./ui/format.js"
 
@@ -35,31 +53,56 @@ const LOG_MAX_LIMIT = 500
 const LOG_DEFAULT_LOOKBACK = 60
 const LOG_MAX_LOOKBACK = 24 * 60
 
-const jsonResponse = (value: unknown, status = 200) => HttpServerResponse.jsonUnsafe(value, { status })
+const jsonResponse = (value: unknown, status = 200) =>
+	HttpServerResponse.jsonUnsafe(value, { status })
 const textResponse = (value: string) => HttpServerResponse.text(value)
 const htmlResponse = (value: string) => HttpServerResponse.html(value)
-const notFoundResponse = (message = "Not found") => jsonResponse({ error: message }, 404)
-const requestUrl = (request: { readonly url: string }) => new URL(request.url, config.otel.baseUrl)
-const withStore = <A>(f: (store: TelemetryStore["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TelemetryStore.asEffect(), f)
-const withTraceQuery = <A>(f: (query: TraceQueryService["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TraceQueryService.asEffect(), f)
-const withLogQuery = <A>(f: (query: LogQueryService["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(LogQueryService.asEffect(), f)
+const notFoundResponse = (message = "Not found") =>
+	jsonResponse({ error: message }, 404)
+const requestUrl = (request: { readonly url: string }) =>
+	new URL(request.url, config.otel.baseUrl)
+const withStore = <A>(
+	f: (store: TelemetryStore["Service"]) => Effect.Effect<A, Error>,
+) => Effect.flatMap(TelemetryStore.asEffect(), f)
+const withTraceQuery = <A>(
+	f: (query: TraceQueryService["Service"]) => Effect.Effect<A, Error>,
+) => Effect.flatMap(TraceQueryService.asEffect(), f)
+const withLogQuery = <A>(
+	f: (query: LogQueryService["Service"]) => Effect.Effect<A, Error>,
+) => Effect.flatMap(LogQueryService.asEffect(), f)
 // Response-building helpers are generic in R so a handler can depend
 // on TelemetryStore (query path) or AsyncIngest (worker-RPC path)
 // without forcing every handler onto the same service surface.
 const respondJson = <A, R>(effect: Effect.Effect<A, unknown, R>) =>
 	Effect.match(effect, {
-		onFailure: (error) => jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500),
+		onFailure: (error) =>
+			jsonResponse(
+				{ error: error instanceof Error ? error.message : String(error) },
+				500,
+			),
 		onSuccess: (value) => jsonResponse(value),
 	})
-const respondRaw = <R>(effect: Effect.Effect<ReturnType<typeof jsonResponse>, unknown, R>) =>
+const respondRaw = <R>(
+	effect: Effect.Effect<ReturnType<typeof jsonResponse>, unknown, R>,
+) =>
 	Effect.match(effect, {
-		onFailure: (error) => jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500),
+		onFailure: (error) =>
+			jsonResponse(
+				{ error: error instanceof Error ? error.message : String(error) },
+				500,
+			),
 		onSuccess: (value) => value,
 	})
 
-const parseLimit = (value: string | null, fallback: number) => parsePositiveInt(value ?? undefined, fallback)
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max))
-const parseBoundedLimit = (value: string | null, fallback: number, max: number) => clamp(parseLimit(value, fallback), 1, max)
+const parseLimit = (value: string | null, fallback: number) =>
+	parsePositiveInt(value ?? undefined, fallback)
+const clamp = (value: number, min: number, max: number) =>
+	Math.max(min, Math.min(value, max))
+const parseBoundedLimit = (
+	value: string | null,
+	fallback: number,
+	max: number,
+) => clamp(parseLimit(value, fallback), 1, max)
 
 const parseLookbackMinutes = (value: string | null, fallback: number) => {
 	if (!value) return fallback
@@ -73,7 +116,11 @@ const parseLookbackMinutes = (value: string | null, fallback: number) => {
 	return amount
 }
 
-const parseBoundedLookbackMinutes = (value: string | null, fallback: number, max: number) => clamp(parseLookbackMinutes(value, fallback), 1, max)
+const parseBoundedLookbackMinutes = (
+	value: string | null,
+	fallback: number,
+	max: number,
+) => clamp(parseLookbackMinutes(value, fallback), 1, max)
 
 const attributeFiltersFromQuery = (url: URL) =>
 	attributeFiltersFromEntries(url.searchParams.entries())
@@ -85,12 +132,15 @@ type CursorShape =
 	| { readonly kind: "trace"; readonly startedAt: number; readonly id: string }
 	| { readonly kind: "log"; readonly timestamp: number; readonly id: string }
 
-const encodeCursor = (cursor: CursorShape) => Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url")
+const encodeCursor = (cursor: CursorShape) =>
+	Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url")
 
 const decodeCursor = (value: string | null): CursorShape | null => {
 	if (!value) return null
 	try {
-		return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as CursorShape
+		return JSON.parse(
+			Buffer.from(value, "base64url").toString("utf8"),
+		) as CursorShape
 	} catch {
 		return null
 	}
@@ -102,7 +152,13 @@ const formatLookback = (minutes: number) => {
 	return `${minutes}m`
 }
 
-const listMeta = (input: { readonly limit: number; readonly lookbackMinutes: number; readonly returned: number; readonly truncated: boolean; readonly nextCursor: string | null }) => ({
+const listMeta = (input: {
+	readonly limit: number
+	readonly lookbackMinutes: number
+	readonly returned: number
+	readonly truncated: boolean
+	readonly nextCursor: string | null
+}) => ({
 	limit: input.limit,
 	lookback: formatLookback(input.lookbackMinutes),
 	returned: input.returned,
@@ -110,7 +166,14 @@ const listMeta = (input: { readonly limit: number; readonly lookbackMinutes: num
 	nextCursor: input.nextCursor,
 })
 
-const paginateSummaries = (summaries: readonly TraceSummaryItem[], options: { readonly limit: number; readonly lookbackMinutes: number; readonly cursor: CursorShape | null }) => {
+const paginateSummaries = (
+	summaries: readonly TraceSummaryItem[],
+	options: {
+		readonly limit: number
+		readonly lookbackMinutes: number
+		readonly cursor: CursorShape | null
+	},
+) => {
 	const page = summaries.slice(0, options.limit)
 	const last = page.at(-1)
 	return {
@@ -120,12 +183,25 @@ const paginateSummaries = (summaries: readonly TraceSummaryItem[], options: { re
 			lookbackMinutes: options.lookbackMinutes,
 			returned: page.length,
 			truncated: summaries.length > page.length,
-			nextCursor: last ? encodeCursor({ kind: "trace", startedAt: last.startedAt.getTime(), id: last.traceId }) : null,
+			nextCursor: last
+				? encodeCursor({
+						kind: "trace",
+						startedAt: last.startedAt.getTime(),
+						id: last.traceId,
+					})
+				: null,
 		}),
 	}
 }
 
-const paginateLogs = (logs: readonly LogItem[], options: { readonly limit: number; readonly lookbackMinutes: number; readonly cursor: CursorShape | null }) => {
+const paginateLogs = (
+	logs: readonly LogItem[],
+	options: {
+		readonly limit: number
+		readonly lookbackMinutes: number
+		readonly cursor: CursorShape | null
+	},
+) => {
 	const page = logs.slice(0, options.limit)
 	const last = page.at(-1)
 
@@ -136,7 +212,13 @@ const paginateLogs = (logs: readonly LogItem[], options: { readonly limit: numbe
 			lookbackMinutes: options.lookbackMinutes,
 			returned: page.length,
 			truncated: logs.length > page.length,
-			nextCursor: last ? encodeCursor({ kind: "log", timestamp: last.timestamp.getTime(), id: last.id }) : null,
+			nextCursor: last
+				? encodeCursor({
+						kind: "log",
+						timestamp: last.timestamp.getTime(),
+						id: last.id,
+					})
+				: null,
 		}),
 	}
 }
@@ -163,40 +245,54 @@ const loadLogsPage = (input: {
 				body: input.body,
 				lookbackMinutes: input.lookbackMinutes,
 				limit: input.limit + 1,
-				cursorTimestampMs: input.cursor?.kind === "log" ? input.cursor.timestamp : undefined,
+				cursorTimestampMs:
+					input.cursor?.kind === "log" ? input.cursor.timestamp : undefined,
 				cursorId: input.cursor?.kind === "log" ? input.cursor.id : undefined,
 				attributeFilters: input.attributeFilters,
 				attributeContainsFilters: input.attributeContainsFilters,
 			}),
-			(logs) => paginateLogs(logs, {
-				limit: input.limit,
-				lookbackMinutes: input.lookbackMinutes,
-				cursor: input.cursor,
-			}),
+			(logs) =>
+				paginateLogs(logs, {
+					limit: input.limit,
+					lookbackMinutes: input.lookbackMinutes,
+					cursor: input.cursor,
+				}),
 		),
 	)
 
 const handleLogSearch = (request: { readonly url: string }) =>
-	respondRaw(Effect.gen(function*() {
-		const url = requestUrl(request)
-		const attributeFilters = attributeFiltersFromQuery(url)
-		const attributeContainsFilters = attributeContainsFiltersFromQuery(url)
-		const limit = parseBoundedLimit(url.searchParams.get("limit"), LOG_DEFAULT_LIMIT, LOG_MAX_LIMIT)
-		const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
-		const cursor = decodeCursor(url.searchParams.get("cursor"))
-		return jsonResponse(yield* loadLogsPage({
-			serviceName: url.searchParams.get("service"),
-			severity: url.searchParams.get("severity"),
-			traceId: url.searchParams.get("traceId"),
-			spanId: url.searchParams.get("spanId"),
-			body: url.searchParams.get("body"),
-			attributeFilters,
-			attributeContainsFilters,
-			limit,
-			lookbackMinutes,
-			cursor,
-		}))
-	}))
+	respondRaw(
+		Effect.gen(function* () {
+			const url = requestUrl(request)
+			const attributeFilters = attributeFiltersFromQuery(url)
+			const attributeContainsFilters = attributeContainsFiltersFromQuery(url)
+			const limit = parseBoundedLimit(
+				url.searchParams.get("limit"),
+				LOG_DEFAULT_LIMIT,
+				LOG_MAX_LIMIT,
+			)
+			const lookbackMinutes = parseBoundedLookbackMinutes(
+				url.searchParams.get("lookback"),
+				LOG_DEFAULT_LOOKBACK,
+				LOG_MAX_LOOKBACK,
+			)
+			const cursor = decodeCursor(url.searchParams.get("cursor"))
+			return jsonResponse(
+				yield* loadLogsPage({
+					serviceName: url.searchParams.get("service"),
+					severity: url.searchParams.get("severity"),
+					traceId: url.searchParams.get("traceId"),
+					spanId: url.searchParams.get("spanId"),
+					body: url.searchParams.get("body"),
+					attributeFilters,
+					attributeContainsFilters,
+					limit,
+					lookbackMinutes,
+					cursor,
+				}),
+			)
+		}),
+	)
 
 const escapeHtml = (value: string) =>
 	value
@@ -278,7 +374,11 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 	(handlers) =>
 		handlers
 			.handleRaw("root", () =>
-				Effect.succeed(textResponse("motel local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/ai/calls\nGET /api/ai/calls/<span-id>\nGET /api/ai/stats\nGET /api/facets?type=logs&field=severity\nGET /api/docs\nGET /api/docs/<name>\nGET /openapi.json\nGET /docs\nGET /trace/<trace-id>\n")),
+				Effect.succeed(
+					textResponse(
+						"motel local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/ai/calls\nGET /api/ai/calls/<span-id>\nGET /api/ai/stats\nGET /api/facets?type=logs&field=severity\nGET /api/docs\nGET /api/docs/<name>\nGET /openapi.json\nGET /docs\nGET /trace/<trace-id>\n",
+					),
+				),
 			)
 			.handle("health", () =>
 				Effect.succeed({
@@ -300,7 +400,9 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 				respondRaw(
 					Effect.flatMap(request.json, (payload) =>
 						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
+							Effect.flatMap(AsyncIngest.asEffect(), (ingest) =>
+								ingest.ingestTraces({ payload }),
+							),
 							(result) => jsonResponse(result),
 						),
 					),
@@ -310,290 +412,527 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 				respondRaw(
 					Effect.flatMap(request.json, (payload) =>
 						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
+							Effect.flatMap(AsyncIngest.asEffect(), (ingest) =>
+								ingest.ingestLogs({ payload }),
+							),
 							(result) => jsonResponse(result),
 						),
 					),
 				),
 			)
-			.handleRaw("services", () => respondJson(Effect.map(withTraceQuery((store) => store.listServices), (data) => ({ data }))))
+			.handleRaw("services", () =>
+				respondJson(
+					Effect.map(
+						withTraceQuery((store) => store.listServices),
+						(data) => ({ data }),
+					),
+				),
+			)
 			.handleRaw("traces", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const service = url.searchParams.get("service")
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), TRACE_DEFAULT_LIMIT, TRACE_MAX_LIMIT)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					const data = yield* withTraceQuery((store) => store.listTraceSummaries(service, {
-						limit: limit + 1,
-						lookbackMinutes,
-						cursorStartedAtMs: cursor?.kind === "trace" ? cursor.startedAt : undefined,
-						cursorTraceId: cursor?.kind === "trace" ? cursor.id : undefined,
-					}))
-					return jsonResponse(paginateSummaries(data, { limit, lookbackMinutes, cursor }))
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const service = url.searchParams.get("service")
+						const limit = parseBoundedLimit(
+							url.searchParams.get("limit"),
+							TRACE_DEFAULT_LIMIT,
+							TRACE_MAX_LIMIT,
+						)
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							TRACE_DEFAULT_LOOKBACK,
+							TRACE_MAX_LOOKBACK,
+						)
+						const cursor = decodeCursor(url.searchParams.get("cursor"))
+						const data = yield* withTraceQuery((store) =>
+							store.listTraceSummaries(service, {
+								limit: limit + 1,
+								lookbackMinutes,
+								cursorStartedAtMs:
+									cursor?.kind === "trace" ? cursor.startedAt : undefined,
+								cursorTraceId: cursor?.kind === "trace" ? cursor.id : undefined,
+							}),
+						)
+						return jsonResponse(
+							paginateSummaries(data, { limit, lookbackMinutes, cursor }),
+						)
+					}),
+				),
 			)
 			.handleRaw("searchTraces", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const attributeFilters = attributeFiltersFromQuery(url)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), TRACE_DEFAULT_LIMIT, TRACE_MAX_LIMIT)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					const data = yield* withTraceQuery((store) =>
-						store.searchTraceSummaries({
-							serviceName: url.searchParams.get("service"),
-							operation: url.searchParams.get("operation"),
-							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
-							minDurationMs: url.searchParams.get("minDurationMs") ? Number.parseFloat(url.searchParams.get("minDurationMs") ?? "") : null,
-							attributeFilters,
-							aiText: url.searchParams.get("aiText"),
-							limit: limit + 1,
-							lookbackMinutes,
-							cursorStartedAtMs: cursor?.kind === "trace" ? cursor.startedAt : undefined,
-							cursorTraceId: cursor?.kind === "trace" ? cursor.id : undefined,
-						}),
-					)
-					return jsonResponse(paginateSummaries(data, { limit, lookbackMinutes, cursor }))
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const attributeFilters = attributeFiltersFromQuery(url)
+						const limit = parseBoundedLimit(
+							url.searchParams.get("limit"),
+							TRACE_DEFAULT_LIMIT,
+							TRACE_MAX_LIMIT,
+						)
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							TRACE_DEFAULT_LOOKBACK,
+							TRACE_MAX_LOOKBACK,
+						)
+						const cursor = decodeCursor(url.searchParams.get("cursor"))
+						const data = yield* withTraceQuery((store) =>
+							store.searchTraceSummaries({
+								serviceName: url.searchParams.get("service"),
+								operation: url.searchParams.get("operation"),
+								status:
+									(url.searchParams.get("status") as "ok" | "error" | null) ??
+									null,
+								minDurationMs: url.searchParams.get("minDurationMs")
+									? Number.parseFloat(
+											url.searchParams.get("minDurationMs") ?? "",
+										)
+									: null,
+								attributeFilters,
+								aiText: url.searchParams.get("aiText"),
+								limit: limit + 1,
+								lookbackMinutes,
+								cursorStartedAtMs:
+									cursor?.kind === "trace" ? cursor.startedAt : undefined,
+								cursorTraceId: cursor?.kind === "trace" ? cursor.id : undefined,
+							}),
+						)
+						return jsonResponse(
+							paginateSummaries(data, { limit, lookbackMinutes, cursor }),
+						)
+					}),
+				),
 			)
 			.handleRaw("traceStats", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const attributeFilters = attributeFiltersFromQuery(url)
-					const groupBy = url.searchParams.get("groupBy")
-					const agg = url.searchParams.get("agg")
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					if (!groupBy || (agg !== "count" && agg !== "avg_duration" && agg !== "p95_duration" && agg !== "error_rate")) {
-						return jsonResponse({ error: "Expected groupBy and agg=count|avg_duration|p95_duration|error_rate" }, 400)
-					}
-					const data = yield* withTraceQuery((store) =>
-						store.traceStats({
-							groupBy,
-							agg,
-							serviceName: url.searchParams.get("service"),
-							operation: url.searchParams.get("operation"),
-							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
-							minDurationMs: url.searchParams.get("minDurationMs") ? Number.parseFloat(url.searchParams.get("minDurationMs") ?? "") : null,
-							attributeFilters,
-							limit: parseBoundedLimit(url.searchParams.get("limit"), 20, TRACE_MAX_LIMIT),
-							lookbackMinutes,
-						}),
-					)
-					return jsonResponse({ data })
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const attributeFilters = attributeFiltersFromQuery(url)
+						const groupBy = url.searchParams.get("groupBy")
+						const agg = url.searchParams.get("agg")
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							TRACE_DEFAULT_LOOKBACK,
+							TRACE_MAX_LOOKBACK,
+						)
+						if (
+							!groupBy ||
+							(agg !== "count" &&
+								agg !== "avg_duration" &&
+								agg !== "p95_duration" &&
+								agg !== "error_rate")
+						) {
+							return jsonResponse(
+								{
+									error:
+										"Expected groupBy and agg=count|avg_duration|p95_duration|error_rate",
+								},
+								400,
+							)
+						}
+						const data = yield* withTraceQuery((store) =>
+							store.traceStats({
+								groupBy,
+								agg,
+								serviceName: url.searchParams.get("service"),
+								operation: url.searchParams.get("operation"),
+								status:
+									(url.searchParams.get("status") as "ok" | "error" | null) ??
+									null,
+								minDurationMs: url.searchParams.get("minDurationMs")
+									? Number.parseFloat(
+											url.searchParams.get("minDurationMs") ?? "",
+										)
+									: null,
+								attributeFilters,
+								limit: parseBoundedLimit(
+									url.searchParams.get("limit"),
+									20,
+									TRACE_MAX_LIMIT,
+								),
+								lookbackMinutes,
+							}),
+						)
+						return jsonResponse({ data })
+					}),
+				),
 			)
 			.handleRaw("searchSpans", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const attributeFilters = attributeFiltersFromQuery(url)
-					const attributeContainsFilters = attributeContainsFiltersFromQuery(url)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), SPAN_DEFAULT_LIMIT, SPAN_MAX_LIMIT)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					const data = yield* withTraceQuery((store) =>
-						store.searchSpans({
-							serviceName: url.searchParams.get("service"),
-							traceId: url.searchParams.get("traceId"),
-							operation: url.searchParams.get("operation"),
-							parentOperation: url.searchParams.get("parentOperation"),
-							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
-							attributeFilters,
-							attributeContainsFilters,
-							limit: limit + 1,
-							lookbackMinutes,
-						}),
-					)
-					const truncated = data.length > limit
-					const page = truncated ? data.slice(0, limit) : data
-					return jsonResponse({
-						data: page,
-						meta: listMeta({
-							limit,
-							lookbackMinutes,
-							returned: page.length,
-							truncated,
-							nextCursor: null,
-						}),
-					})
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const attributeFilters = attributeFiltersFromQuery(url)
+						const attributeContainsFilters =
+							attributeContainsFiltersFromQuery(url)
+						const limit = parseBoundedLimit(
+							url.searchParams.get("limit"),
+							SPAN_DEFAULT_LIMIT,
+							SPAN_MAX_LIMIT,
+						)
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							TRACE_DEFAULT_LOOKBACK,
+							TRACE_MAX_LOOKBACK,
+						)
+						const data = yield* withTraceQuery((store) =>
+							store.searchSpans({
+								serviceName: url.searchParams.get("service"),
+								traceId: url.searchParams.get("traceId"),
+								operation: url.searchParams.get("operation"),
+								parentOperation: url.searchParams.get("parentOperation"),
+								status:
+									(url.searchParams.get("status") as "ok" | "error" | null) ??
+									null,
+								attributeFilters,
+								attributeContainsFilters,
+								limit: limit + 1,
+								lookbackMinutes,
+							}),
+						)
+						const truncated = data.length > limit
+						const page = truncated ? data.slice(0, limit) : data
+						return jsonResponse({
+							data: page,
+							meta: listMeta({
+								limit,
+								lookbackMinutes,
+								returned: page.length,
+								truncated,
+								nextCursor: null,
+							}),
+						})
+					}),
+				),
 			)
 			.handleRaw("traceLogs", ({ params, request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), LOG_DEFAULT_LIMIT, LOG_MAX_LIMIT)
-					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					return jsonResponse(yield* loadLogsPage({ traceId: params.traceId, limit, lookbackMinutes, cursor }))
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							LOG_DEFAULT_LOOKBACK,
+							LOG_MAX_LOOKBACK,
+						)
+						const limit = parseBoundedLimit(
+							url.searchParams.get("limit"),
+							LOG_DEFAULT_LIMIT,
+							LOG_MAX_LIMIT,
+						)
+						const cursor = decodeCursor(url.searchParams.get("cursor"))
+						return jsonResponse(
+							yield* loadLogsPage({
+								traceId: params.traceId,
+								limit,
+								lookbackMinutes,
+								cursor,
+							}),
+						)
+					}),
+				),
 			)
 			.handleRaw("traceSpans", ({ params }) =>
-				respondJson(Effect.map(withTraceQuery((store) => store.listTraceSpans(params.traceId)), (data) => ({ data }))),
+				respondJson(
+					Effect.map(
+						withTraceQuery((store) => store.listTraceSpans(params.traceId)),
+						(data) => ({ data }),
+					),
+				),
 			)
 			.handleRaw("spanLogs", ({ params, request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), LOG_DEFAULT_LIMIT, LOG_MAX_LIMIT)
-					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					return jsonResponse(yield* loadLogsPage({ spanId: params.spanId, limit, lookbackMinutes, cursor }))
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							LOG_DEFAULT_LOOKBACK,
+							LOG_MAX_LOOKBACK,
+						)
+						const limit = parseBoundedLimit(
+							url.searchParams.get("limit"),
+							LOG_DEFAULT_LIMIT,
+							LOG_MAX_LIMIT,
+						)
+						const cursor = decodeCursor(url.searchParams.get("cursor"))
+						return jsonResponse(
+							yield* loadLogsPage({
+								spanId: params.spanId,
+								limit,
+								lookbackMinutes,
+								cursor,
+							}),
+						)
+					}),
+				),
 			)
 			.handleRaw("span", ({ params }) =>
 				respondRaw(
-					Effect.flatMap(withTraceQuery((store) => store.getSpan(params.spanId)), (data) =>
-						Effect.succeed(data ? jsonResponse({ data }) : notFoundResponse("Span not found")),
+					Effect.flatMap(
+						withTraceQuery((store) => store.getSpan(params.spanId)),
+						(data) =>
+							Effect.succeed(
+								data
+									? jsonResponse({ data })
+									: notFoundResponse("Span not found"),
+							),
 					),
 				),
 			)
 			.handleRaw("trace", ({ params }) =>
 				respondRaw(
-					Effect.flatMap(withTraceQuery((store) => store.getTrace(params.traceId)), (data) =>
-						Effect.succeed(data ? jsonResponse({ data }) : notFoundResponse("Trace not found")),
+					Effect.flatMap(
+						withTraceQuery((store) => store.getTrace(params.traceId)),
+						(data) =>
+							Effect.succeed(
+								data
+									? jsonResponse({ data })
+									: notFoundResponse("Trace not found"),
+							),
 					),
 				),
 			)
 			.handleRaw("logs", ({ request }) => handleLogSearch(request))
 			.handleRaw("searchLogs", ({ request }) => handleLogSearch(request))
 			.handleRaw("logStats", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const attributeFilters = attributeFiltersFromQuery(url)
-					const groupBy = url.searchParams.get("groupBy")
-					const agg = url.searchParams.get("agg")
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
-					if (!groupBy || agg !== "count") {
-						return jsonResponse({ error: "Expected groupBy and agg=count" }, 400)
-					}
-					const data = yield* withLogQuery((store) =>
-						store.logStats({
-							groupBy,
-							agg: "count",
-							serviceName: url.searchParams.get("service"),
-							traceId: url.searchParams.get("traceId"),
-							spanId: url.searchParams.get("spanId"),
-							body: url.searchParams.get("body"),
-							attributeFilters,
-							limit: parseBoundedLimit(url.searchParams.get("limit"), 20, LOG_MAX_LIMIT),
-							lookbackMinutes,
-						}),
-					)
-					return jsonResponse({ data })
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const attributeFilters = attributeFiltersFromQuery(url)
+						const groupBy = url.searchParams.get("groupBy")
+						const agg = url.searchParams.get("agg")
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							LOG_DEFAULT_LOOKBACK,
+							LOG_MAX_LOOKBACK,
+						)
+						if (!groupBy || agg !== "count") {
+							return jsonResponse(
+								{ error: "Expected groupBy and agg=count" },
+								400,
+							)
+						}
+						const data = yield* withLogQuery((store) =>
+							store.logStats({
+								groupBy,
+								agg: "count",
+								serviceName: url.searchParams.get("service"),
+								traceId: url.searchParams.get("traceId"),
+								spanId: url.searchParams.get("spanId"),
+								body: url.searchParams.get("body"),
+								attributeFilters,
+								limit: parseBoundedLimit(
+									url.searchParams.get("limit"),
+									20,
+									LOG_MAX_LIMIT,
+								),
+								lookbackMinutes,
+							}),
+						)
+						return jsonResponse({ data })
+					}),
+				),
 			)
 			.handle("docs", () =>
 				Effect.succeed({
 					docs: [
-						{ name: "debug", title: "Motel Debug Workflow", path: "/api/docs/debug" },
-						{ name: "effect", title: "Effect Instrumentation Guide", path: "/api/docs/effect" },
+						{
+							name: "debug",
+							title: "Motel Debug Workflow",
+							path: "/api/docs/debug",
+						},
+						{
+							name: "effect",
+							title: "Effect Instrumentation Guide",
+							path: "/api/docs/effect",
+						},
 					],
 				}),
 			)
 			.handleRaw("doc", ({ params }) =>
-				respondRaw(Effect.gen(function*() {
-					const docFiles: Record<string, string> = {
-						debug: path.resolve(import.meta.dir, "../skills/motel-debug/SKILL.md"),
-						effect: path.resolve(import.meta.dir, "../skills/motel-debug/references/effect.md"),
-					}
-					const filePath = docFiles[params.name]
-					if (!filePath) return notFoundResponse(`Unknown doc: ${params.name}. Available: ${Object.keys(docFiles).join(", ")}`)
-					try {
-						const content = yield* Effect.promise(() => fs.readFile(filePath, "utf8"))
-						return textResponse(content)
-					} catch {
-						return notFoundResponse(`Doc file not found: ${params.name}`)
-					}
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const docFiles: Record<string, string> = {
+							debug: path.resolve(
+								import.meta.dir,
+								"../skills/motel-debug/SKILL.md",
+							),
+							effect: path.resolve(
+								import.meta.dir,
+								"../skills/motel-debug/references/effect.md",
+							),
+						}
+						const filePath = docFiles[params.name]
+						if (!filePath)
+							return notFoundResponse(
+								`Unknown doc: ${params.name}. Available: ${Object.keys(docFiles).join(", ")}`,
+							)
+						try {
+							const content = yield* Effect.promise(() =>
+								fs.readFile(filePath, "utf8"),
+							)
+							return textResponse(content)
+						} catch {
+							return notFoundResponse(`Doc file not found: ${params.name}`)
+						}
+					}),
+				),
 			)
 			.handleRaw("facets", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const type = url.searchParams.get("type")
-					const field = url.searchParams.get("field")
-					if ((type !== "traces" && type !== "logs") || !field) {
-						return jsonResponse({ error: "Expected type=traces|logs and field=<name>" }, 400)
-					}
-					const data = yield* withTraceQuery((store) =>
-						store.listFacets({
-							type,
-							field,
-							serviceName: url.searchParams.get("service"),
-							key: url.searchParams.get("key"),
-							lookbackMinutes: parseLookbackMinutes(url.searchParams.get("lookback"), config.otel.traceLookbackMinutes),
-							limit: parseLimit(url.searchParams.get("limit"), 20),
-						}),
-					)
-					return jsonResponse({ data })
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const type = url.searchParams.get("type")
+						const field = url.searchParams.get("field")
+						if ((type !== "traces" && type !== "logs") || !field) {
+							return jsonResponse(
+								{ error: "Expected type=traces|logs and field=<name>" },
+								400,
+							)
+						}
+						const data = yield* withTraceQuery((store) =>
+							store.listFacets({
+								type,
+								field,
+								serviceName: url.searchParams.get("service"),
+								key: url.searchParams.get("key"),
+								lookbackMinutes: parseLookbackMinutes(
+									url.searchParams.get("lookback"),
+									config.otel.traceLookbackMinutes,
+								),
+								limit: parseLimit(url.searchParams.get("limit"), 20),
+							}),
+						)
+						return jsonResponse({ data })
+					}),
+				),
 			)
 			.handleRaw("aiCalls", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), 20, SPAN_MAX_LIMIT)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					const data = yield* withStore((store) =>
-						store.searchAiCalls({
-							service: url.searchParams.get("service"),
-							traceId: url.searchParams.get("traceId"),
-							sessionId: url.searchParams.get("sessionId"),
-							functionId: url.searchParams.get("functionId"),
-							provider: url.searchParams.get("provider"),
-							model: url.searchParams.get("model"),
-							operation: url.searchParams.get("operation"),
-							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
-							minDurationMs: url.searchParams.get("minDurationMs") ? Number(url.searchParams.get("minDurationMs")) : null,
-							text: url.searchParams.get("text"),
-							lookbackMinutes,
-							limit,
-						}),
-					)
-					return jsonResponse({
-						data,
-						meta: listMeta({ limit, lookbackMinutes, returned: data.length, truncated: false, nextCursor: null }),
-					})
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const limit = parseBoundedLimit(
+							url.searchParams.get("limit"),
+							20,
+							SPAN_MAX_LIMIT,
+						)
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							TRACE_DEFAULT_LOOKBACK,
+							TRACE_MAX_LOOKBACK,
+						)
+						const data = yield* withStore((store) =>
+							store.searchAiCalls({
+								service: url.searchParams.get("service"),
+								traceId: url.searchParams.get("traceId"),
+								sessionId: url.searchParams.get("sessionId"),
+								functionId: url.searchParams.get("functionId"),
+								provider: url.searchParams.get("provider"),
+								model: url.searchParams.get("model"),
+								operation: url.searchParams.get("operation"),
+								status:
+									(url.searchParams.get("status") as "ok" | "error" | null) ??
+									null,
+								minDurationMs: url.searchParams.get("minDurationMs")
+									? Number(url.searchParams.get("minDurationMs"))
+									: null,
+								text: url.searchParams.get("text"),
+								lookbackMinutes,
+								limit,
+							}),
+						)
+						return jsonResponse({
+							data,
+							meta: listMeta({
+								limit,
+								lookbackMinutes,
+								returned: data.length,
+								truncated: false,
+								nextCursor: null,
+							}),
+						})
+					}),
+				),
 			)
 			.handleRaw("aiCall", ({ params }) =>
-				respondRaw(Effect.gen(function*() {
-					const data = yield* withStore((store) => store.getAiCall(params.spanId))
-					if (!data) return notFoundResponse("AI call not found")
-					return jsonResponse({ data })
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const data = yield* withStore((store) =>
+							store.getAiCall(params.spanId),
+						)
+						if (!data) return notFoundResponse("AI call not found")
+						return jsonResponse({ data })
+					}),
+				),
 			)
 			.handleRaw("aiStats", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const groupBy = url.searchParams.get("groupBy") as "provider" | "model" | "functionId" | "sessionId" | "status" | null
-					const agg = url.searchParams.get("agg") as "count" | "avg_duration" | "p95_duration" | "total_input_tokens" | "total_output_tokens" | null
-					if (!groupBy || !agg) {
-						return jsonResponse({ error: "Expected groupBy and agg parameters" }, 400)
-					}
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					const data = yield* withStore((store) =>
-						store.aiCallStats({
-							groupBy,
-							agg,
-							service: url.searchParams.get("service"),
-							traceId: url.searchParams.get("traceId"),
-							sessionId: url.searchParams.get("sessionId"),
-							functionId: url.searchParams.get("functionId"),
-							provider: url.searchParams.get("provider"),
-							model: url.searchParams.get("model"),
-							operation: url.searchParams.get("operation"),
-							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
-							minDurationMs: url.searchParams.get("minDurationMs") ? Number(url.searchParams.get("minDurationMs")) : null,
-							lookbackMinutes,
-							limit: parseBoundedLimit(url.searchParams.get("limit"), 20, SPAN_MAX_LIMIT),
-						}),
-					)
-					return jsonResponse({ data })
-				})),
+				respondRaw(
+					Effect.gen(function* () {
+						const url = requestUrl(request)
+						const groupBy = url.searchParams.get("groupBy") as
+							| "provider"
+							| "model"
+							| "functionId"
+							| "sessionId"
+							| "status"
+							| null
+						const agg = url.searchParams.get("agg") as
+							| "count"
+							| "avg_duration"
+							| "p95_duration"
+							| "total_input_tokens"
+							| "total_output_tokens"
+							| null
+						if (!groupBy || !agg) {
+							return jsonResponse(
+								{ error: "Expected groupBy and agg parameters" },
+								400,
+							)
+						}
+						const lookbackMinutes = parseBoundedLookbackMinutes(
+							url.searchParams.get("lookback"),
+							TRACE_DEFAULT_LOOKBACK,
+							TRACE_MAX_LOOKBACK,
+						)
+						const data = yield* withStore((store) =>
+							store.aiCallStats({
+								groupBy,
+								agg,
+								service: url.searchParams.get("service"),
+								traceId: url.searchParams.get("traceId"),
+								sessionId: url.searchParams.get("sessionId"),
+								functionId: url.searchParams.get("functionId"),
+								provider: url.searchParams.get("provider"),
+								model: url.searchParams.get("model"),
+								operation: url.searchParams.get("operation"),
+								status:
+									(url.searchParams.get("status") as "ok" | "error" | null) ??
+									null,
+								minDurationMs: url.searchParams.get("minDurationMs")
+									? Number(url.searchParams.get("minDurationMs"))
+									: null,
+								lookbackMinutes,
+								limit: parseBoundedLimit(
+									url.searchParams.get("limit"),
+									20,
+									SPAN_MAX_LIMIT,
+								),
+							}),
+						)
+						return jsonResponse({ data })
+					}),
+				),
 			)
 			.handleRaw("tracePage", ({ params }) =>
 				respondRaw(
-					Effect.flatMap(withTraceQuery((store) => store.getTrace(params.traceId)), (trace) =>
-						trace
-							? Effect.map(withLogQuery((store) => store.listTraceLogs(params.traceId)), (logs) => htmlResponse(renderTracePage(trace, logs)))
-							: Effect.succeed(notFoundResponse("Trace not found")),
+					Effect.flatMap(
+						withTraceQuery((store) => store.getTrace(params.traceId)),
+						(trace) =>
+							trace
+								? Effect.map(
+										withLogQuery((store) =>
+											store.listTraceLogs(params.traceId),
+										),
+										(logs) => htmlResponse(renderTracePage(trace, logs)),
+									)
+								: Effect.succeed(notFoundResponse("Trace not found")),
 					),
 				),
 			),
@@ -605,14 +944,21 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 
 // API routes come from the Effect HttpApi definition. Everything under
 // /api/*, /v1/*, /openapi.json, /docs is handled here.
-const ApiLayer = HttpApiBuilder.layer(MotelHttpApi, { openapiPath: "/openapi.json" }).pipe(
+const ApiLayer = HttpApiBuilder.layer(MotelHttpApi, {
+	openapiPath: "/openapi.json",
+}).pipe(
 	Layer.provide(TelemetryGroupLive),
-	Layer.provide(HttpApiScalar.layer(MotelHttpApi, { scalar: { forceDarkModeState: "dark", showOperationId: true } })),
+	Layer.provide(
+		HttpApiScalar.layer(MotelHttpApi, {
+			scalar: { forceDarkModeState: "dark", showOperationId: true },
+		}),
+	),
 )
 
-const QueryServicesLive = Layer.mergeAll(TraceQueryServiceLive, LogQueryServiceLive).pipe(
-	Layer.provideMerge(TelemetryStoreReadonlyLive),
-)
+const QueryServicesLive = Layer.mergeAll(
+	TraceQueryServiceLive,
+	LogQueryServiceLive,
+).pipe(Layer.provideMerge(TelemetryStoreReadonlyLive))
 
 // Web UI: Vite-built SPA served from web/dist. HttpStaticServer.layer
 // handles GET /*, filesystem lookup under `root`, and SPA fallback to
@@ -645,7 +991,9 @@ const RegistryLayer = Layer.effectDiscard(
 					databasePath: config.otel.databasePath,
 				})
 			} catch (err) {
-				console.warn(`motel: failed to write registry entry: ${(err as Error).message}`)
+				console.warn(
+					`motel: failed to write registry entry: ${(err as Error).message}`,
+				)
 			}
 		}),
 		() => Effect.sync(() => removeRegistryEntry(process.pid)),
@@ -671,8 +1019,9 @@ const RegistryLayer = Layer.effectDiscard(
  * primary protection, but this covers a raw `bun src/server.ts` restart).
  */
 export const ServerLive = HttpRouter.serve(
-	Layer.mergeAll(ApiLayer, StaticLayer, RegistryLayer),
-	{ middleware: HttpMiddleware.tracer },
+	Layer.mergeAll(ApiLayer, StaticLayer, RegistryLayer).pipe(
+		Layer.provide(HttpRouter.cors({})),
+	),
 ).pipe(
 	// OTLP ingest paths are NOT traced by the middleware, otherwise
 	// MOTEL_OTEL_ENABLED creates a feedback loop: every outbound span
@@ -680,7 +1029,9 @@ export const ServerLive = HttpRouter.serve(
 	// POSTs again on the next flush. This also shaves ~1 KB of header
 	// attributes off every ingest request that would have been written
 	// to the spans table as noise.
-	Layer.provide(HttpMiddleware.layerTracerDisabledForUrls(["/v1/traces", "/v1/logs"])),
+	Layer.provide(
+		HttpMiddleware.layerTracerDisabledForUrls(["/v1/traces", "/v1/logs"]),
+	),
 	// AsyncIngest spawns the telemetry worker — keeps the main-thread
 	// event loop free during heavy SQLite writes. Provided alongside
 	// the writer TelemetryStore for ingest / maintenance. Query endpoints
@@ -689,9 +1040,11 @@ export const ServerLive = HttpRouter.serve(
 	Layer.provideMerge(AsyncIngestLive),
 	Layer.provideMerge(QueryServicesLive),
 	Layer.provideMerge(TelemetryStoreLive),
-	Layer.provideMerge(BunHttpServer.layer({
-		port: config.otel.port,
-		hostname: config.otel.host,
-		reusePort: true,
-	})),
+	Layer.provideMerge(
+		BunHttpServer.layer({
+			port: config.otel.port,
+			hostname: config.otel.host,
+			reusePort: true,
+		}),
+	),
 )
