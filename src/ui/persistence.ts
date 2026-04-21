@@ -26,7 +26,11 @@ const lastThemePath = `${dirname(config.otel.databasePath)}/last-theme.txt`
 export const readLastTheme = (): ThemeName => {
 	try {
 		const raw = readFileSync(lastThemePath, "utf-8").trim()
-		return raw === "tokyo-night" || raw === "catppuccin" || raw === "motel-default" ? raw : defaultThemeName
+		return raw === "tokyo-night" ||
+			raw === "catppuccin" ||
+			raw === "motel-default"
+			? raw
+			: defaultThemeName
 	} catch {
 		return defaultThemeName
 	}

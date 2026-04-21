@@ -1,8 +1,16 @@
 import { describe, expect, it } from "bun:test"
 import type { TraceSpanItem } from "../domain.ts"
-import { computeMatchingSpanIds, findAdjacentMatch, spanMatchesFilter } from "./waterfallFilter.ts"
+import {
+	computeMatchingSpanIds,
+	findAdjacentMatch,
+	spanMatchesFilter,
+} from "./waterfallFilter.ts"
 
-const span = (spanId: string, operationName: string, tags: Record<string, string> = {}): TraceSpanItem => ({
+const span = (
+	spanId: string,
+	operationName: string,
+	tags: Record<string, string> = {},
+): TraceSpanItem => ({
 	spanId,
 	parentSpanId: null,
 	serviceName: "test",
@@ -26,9 +34,16 @@ describe("spanMatchesFilter", () => {
 	})
 
 	it("matches tag values but not keys", () => {
-		expect(spanMatchesFilter(span("a", "op", { "ai.model.id": "claude" }), "claude")).toBe(true)
+		expect(
+			spanMatchesFilter(span("a", "op", { "ai.model.id": "claude" }), "claude"),
+		).toBe(true)
 		// Key-only match should not count, otherwise searching "ai" dims nothing.
-		expect(spanMatchesFilter(span("a", "op", { "ai.model.id": "claude" }), "model.id")).toBe(false)
+		expect(
+			spanMatchesFilter(
+				span("a", "op", { "ai.model.id": "claude" }),
+				"model.id",
+			),
+		).toBe(false)
 	})
 
 	it("returns true when the needle is empty", () => {
@@ -43,7 +58,11 @@ describe("computeMatchingSpanIds", () => {
 	})
 
 	it("returns only matching span ids", () => {
-		const spans = [span("a", "ai.streamText"), span("b", "Agent.get"), span("c", "ai.toolCall")]
+		const spans = [
+			span("a", "ai.streamText"),
+			span("b", "Agent.get"),
+			span("c", "ai.toolCall"),
+		]
 		const ids = computeMatchingSpanIds(spans, "ai")
 		expect(ids).not.toBeNull()
 		expect(Array.from(ids!)).toEqual(["a", "c"])
@@ -51,16 +70,21 @@ describe("computeMatchingSpanIds", () => {
 })
 
 describe("findAdjacentMatch", () => {
-	const spans = [span("a", "one"), span("b", "two"), span("c", "three"), span("d", "four")]
+	const spans = [
+		span("a", "one"),
+		span("b", "two"),
+		span("c", "three"),
+		span("d", "four"),
+	]
 	const matches = new Set(["b", "d"])
 
 	it("finds next from current selection", () => {
-		expect(findAdjacentMatch(spans, matches, 0, 1)).toBe(1)  // a -> b
-		expect(findAdjacentMatch(spans, matches, 1, 1)).toBe(3)  // b -> d
+		expect(findAdjacentMatch(spans, matches, 0, 1)).toBe(1) // a -> b
+		expect(findAdjacentMatch(spans, matches, 1, 1)).toBe(3) // b -> d
 	})
 
 	it("wraps forward past the end", () => {
-		expect(findAdjacentMatch(spans, matches, 3, 1)).toBe(1)  // d -> b (wrap)
+		expect(findAdjacentMatch(spans, matches, 3, 1)).toBe(1) // d -> b (wrap)
 	})
 
 	it("finds previous from current selection", () => {
@@ -69,7 +93,7 @@ describe("findAdjacentMatch", () => {
 	})
 
 	it("starts from beginning/end when nothing is selected", () => {
-		expect(findAdjacentMatch(spans, matches, null, 1)).toBe(1)  // forward → first match
+		expect(findAdjacentMatch(spans, matches, null, 1)).toBe(1) // forward → first match
 		expect(findAdjacentMatch(spans, matches, null, -1)).toBe(3) // backward → last match
 	})
 

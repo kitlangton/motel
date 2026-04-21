@@ -1,7 +1,16 @@
 import { TextAttributes } from "@opentui/core"
 import type { ReactNode } from "react"
 import type { LogItem, TraceSpanItem } from "../domain.ts"
-import { formatDuration, formatShortDate, formatTimestamp, lifecycleLabel, logSeverityColor, relevantLogAttributes, truncateText, wrapTextLines } from "./format.ts"
+import {
+	formatDuration,
+	formatShortDate,
+	formatTimestamp,
+	lifecycleLabel,
+	logSeverityColor,
+	relevantLogAttributes,
+	truncateText,
+	wrapTextLines,
+} from "./format.ts"
 import { BlankRow, PlainLine, TextLine } from "./primitives.tsx"
 import { colors, SEPARATOR } from "./theme.ts"
 
@@ -38,7 +47,9 @@ export const SpanDetailFullView = ({
 	// --- Header: operation + status line ---
 	push(
 		<TextLine>
-			<span fg={colors.text} attributes={TextAttributes.BOLD}>{span.operationName}</span>
+			<span fg={colors.text} attributes={TextAttributes.BOLD}>
+				{span.operationName}
+			</span>
 		</TextLine>,
 	)
 	push(
@@ -47,9 +58,13 @@ export const SpanDetailFullView = ({
 			<span fg={colors.separator}>{SEPARATOR}</span>
 			<span fg={colors.count}>{formatDuration(span.durationMs)}</span>
 			<span fg={colors.separator}>{SEPARATOR}</span>
-			<span fg={span.isRunning ? colors.warning : colors.muted}>{lifecycleLabel(span)}</span>
+			<span fg={span.isRunning ? colors.warning : colors.muted}>
+				{lifecycleLabel(span)}
+			</span>
 			<span fg={colors.separator}>{SEPARATOR}</span>
-			<span fg={span.status === "error" ? colors.error : colors.passing}>{span.status}</span>
+			<span fg={span.status === "error" ? colors.error : colors.passing}>
+				{span.status}
+			</span>
 		</TextLine>,
 	)
 	push(<BlankRow />)
@@ -60,15 +75,28 @@ export const SpanDetailFullView = ({
 		<TextLine>
 			<span fg={colors.count}>{k.padEnd(metaKeyWidth)}</span>
 			<span fg={colors.muted}> </span>
-			<span fg={vFg}>{truncateText(v, Math.max(8, contentWidth - metaKeyWidth - 1))}</span>
+			<span fg={vFg}>
+				{truncateText(v, Math.max(8, contentWidth - metaKeyWidth - 1))}
+			</span>
 		</TextLine>
 	)
-	push(<TextLine><span fg={colors.accent} attributes={TextAttributes.BOLD}>META</span></TextLine>)
+	push(
+		<TextLine>
+			<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+				META
+			</span>
+		</TextLine>,
+	)
 	push(metaRow("span id", span.spanId))
 	if (span.parentSpanId) push(metaRow("parent", span.parentSpanId))
 	if (span.kind) push(metaRow("kind", span.kind))
 	if (span.scopeName) push(metaRow("scope", span.scopeName))
-	push(metaRow("started", `${formatShortDate(span.startTime)} ${formatTimestamp(span.startTime)}`))
+	push(
+		metaRow(
+			"started",
+			`${formatShortDate(span.startTime)} ${formatTimestamp(span.startTime)}`,
+		),
+	)
 	push(metaRow("depth", String(span.depth), colors.muted))
 
 	// --- Tags ---
@@ -77,20 +105,30 @@ export const SpanDetailFullView = ({
 		push(<BlankRow />)
 		push(
 			<TextLine>
-				<span fg={colors.accent} attributes={TextAttributes.BOLD}>TAGS</span>
+				<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+					TAGS
+				</span>
 				<span fg={colors.muted}> ({tagEntries.length})</span>
 			</TextLine>,
 		)
-		const maxKeyLen = Math.min(32, tagEntries.reduce((m, [k]) => Math.max(m, k.length), 0))
+		const maxKeyLen = Math.min(
+			32,
+			tagEntries.reduce((m, [k]) => Math.max(m, k.length), 0),
+		)
 		const valMaxWidth = Math.max(8, contentWidth - maxKeyLen - 2)
 		for (const [tagKey, value] of tagEntries) {
-			const keyStr = tagKey.length > maxKeyLen ? `${tagKey.slice(0, maxKeyLen - 1)}\u2026` : tagKey.padEnd(maxKeyLen)
+			const keyStr =
+				tagKey.length > maxKeyLen
+					? `${tagKey.slice(0, maxKeyLen - 1)}\u2026`
+					: tagKey.padEnd(maxKeyLen)
 			const wrapped = wrapTextLines(value, valMaxWidth, 4)
 			wrapped.forEach((line, idx) => {
 				push(
 					<TextLine>
-						<span fg={colors.count}>{idx === 0 ? keyStr : " ".repeat(maxKeyLen)}</span>
-						<span fg={colors.muted}>  </span>
+						<span fg={colors.count}>
+							{idx === 0 ? keyStr : " ".repeat(maxKeyLen)}
+						</span>
+						<span fg={colors.muted}> </span>
 						<span fg={colors.text}>{line}</span>
 					</TextLine>,
 				)
@@ -103,12 +141,18 @@ export const SpanDetailFullView = ({
 		push(<BlankRow />)
 		push(
 			<TextLine>
-				<span fg={colors.accent} attributes={TextAttributes.BOLD}>WARNINGS</span>
+				<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+					WARNINGS
+				</span>
 				<span fg={colors.muted}> ({span.warnings.length})</span>
 			</TextLine>,
 		)
 		for (const warning of span.warnings) {
-			for (const line of wrapTextLines(warning, Math.max(16, contentWidth - 2), 4)) {
+			for (const line of wrapTextLines(
+				warning,
+				Math.max(16, contentWidth - 2),
+				4,
+			)) {
 				push(<PlainLine text={line} fg={colors.error} />)
 			}
 		}
@@ -119,7 +163,9 @@ export const SpanDetailFullView = ({
 		push(<BlankRow />)
 		push(
 			<TextLine>
-				<span fg={colors.accent} attributes={TextAttributes.BOLD}>EVENTS</span>
+				<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+					EVENTS
+				</span>
 				<span fg={colors.muted}> ({span.events.length})</span>
 			</TextLine>,
 		)
@@ -133,20 +179,25 @@ export const SpanDetailFullView = ({
 			)
 			const attrs = Object.entries(event.attributes)
 			if (attrs.length > 0) {
-				const attrKeyWidth = Math.min(24, attrs.reduce((m, [k]) => Math.max(m, k.length), 0))
+				const attrKeyWidth = Math.min(
+					24,
+					attrs.reduce((m, [k]) => Math.max(m, k.length), 0),
+				)
 				const attrValWidth = Math.max(8, contentWidth - attrKeyWidth - 4)
 				for (const [attrKey, attrVal] of attrs) {
 					const wrapped = wrapTextLines(attrVal, attrValWidth, 2)
 					wrapped.forEach((line, idx) => {
 						push(
 							<TextLine>
-								<span fg={colors.muted}>  </span>
+								<span fg={colors.muted}> </span>
 								<span fg={colors.count}>
 									{idx === 0
-										? (attrKey.length > attrKeyWidth ? `${attrKey.slice(0, attrKeyWidth - 1)}\u2026` : attrKey.padEnd(attrKeyWidth))
+										? attrKey.length > attrKeyWidth
+											? `${attrKey.slice(0, attrKeyWidth - 1)}\u2026`
+											: attrKey.padEnd(attrKeyWidth)
 										: " ".repeat(attrKeyWidth)}
 								</span>
-								<span fg={colors.muted}>  </span>
+								<span fg={colors.muted}> </span>
 								<span fg={colors.muted}>{line}</span>
 							</TextLine>,
 						)
@@ -161,7 +212,9 @@ export const SpanDetailFullView = ({
 		push(<BlankRow />)
 		push(
 			<TextLine>
-				<span fg={colors.accent} attributes={TextAttributes.BOLD}>LOGS</span>
+				<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+					LOGS
+				</span>
 				<span fg={colors.muted}> ({logs.length})</span>
 			</TextLine>,
 		)
@@ -170,30 +223,43 @@ export const SpanDetailFullView = ({
 				<TextLine>
 					<span fg={colors.muted}>{formatTimestamp(log.timestamp)}</span>
 					<span fg={colors.separator}>{SEPARATOR}</span>
-					<span fg={logSeverityColor(log.severityText)}>{log.severityText.toLowerCase()}</span>
+					<span fg={logSeverityColor(log.severityText)}>
+						{log.severityText.toLowerCase()}
+					</span>
 					<span fg={colors.separator}>{SEPARATOR}</span>
-					<span fg={colors.defaultService}>{log.scopeName ?? log.serviceName}</span>
+					<span fg={colors.defaultService}>
+						{log.scopeName ?? log.serviceName}
+					</span>
 				</TextLine>,
 			)
-			for (const line of wrapTextLines(log.body, Math.max(16, contentWidth - 2), 8)) {
+			for (const line of wrapTextLines(
+				log.body,
+				Math.max(16, contentWidth - 2),
+				8,
+			)) {
 				push(<PlainLine text={line} fg={colors.text} />)
 			}
 			const attrs = relevantLogAttributes(log)
 			if (attrs.length > 0) {
-				const attrKeyWidth = Math.min(22, attrs.reduce((m, [k]) => Math.max(m, k.length), 0))
+				const attrKeyWidth = Math.min(
+					22,
+					attrs.reduce((m, [k]) => Math.max(m, k.length), 0),
+				)
 				const attrValWidth = Math.max(8, contentWidth - attrKeyWidth - 4)
 				for (const [attrKey, attrVal] of attrs) {
 					const wrapped = wrapTextLines(attrVal, attrValWidth, 2)
 					wrapped.forEach((line, idx) => {
 						push(
 							<TextLine>
-								<span fg={colors.muted}>  </span>
+								<span fg={colors.muted}> </span>
 								<span fg={colors.count}>
 									{idx === 0
-										? (attrKey.length > attrKeyWidth ? `${attrKey.slice(0, attrKeyWidth - 1)}\u2026` : attrKey.padEnd(attrKeyWidth))
+										? attrKey.length > attrKeyWidth
+											? `${attrKey.slice(0, attrKeyWidth - 1)}\u2026`
+											: attrKey.padEnd(attrKeyWidth)
 										: " ".repeat(attrKeyWidth)}
 								</span>
-								<span fg={colors.muted}>  </span>
+								<span fg={colors.muted}> </span>
 								<span fg={colors.muted}>{line}</span>
 							</TextLine>,
 						)

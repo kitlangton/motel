@@ -13,7 +13,11 @@ import { resolveCollapseStep } from "./waterfallNav.ts"
 // Test helpers
 // ---------------------------------------------------------------------------
 
-const mkSpan = (spanId: string, depth: number, parentSpanId: string | null): TraceSpanItem => ({
+const mkSpan = (
+	spanId: string,
+	depth: number,
+	parentSpanId: string | null,
+): TraceSpanItem => ({
 	spanId,
 	parentSpanId,
 	serviceName: "svc",
@@ -54,7 +58,8 @@ const buildTree = (): readonly TraceSpanItem[] => [
 ]
 
 const idsOf = (spans: readonly TraceSpanItem[]) => spans.map((s) => s.spanId)
-const indexOfId = (spans: readonly TraceSpanItem[], id: string) => spans.findIndex((s) => s.spanId === id)
+const indexOfId = (spans: readonly TraceSpanItem[], id: string) =>
+	spans.findIndex((s) => s.spanId === id)
 
 // Convenience: run resolveCollapseStep with the selection identified by spanId.
 const step = (
@@ -64,7 +69,10 @@ const step = (
 	direction: "left" | "right",
 ) => {
 	const visible = getVisibleSpans(spans, collapsed)
-	const selectedIndex = selectedSpanId === null ? -1 : visible.findIndex((s) => s.spanId === selectedSpanId)
+	const selectedIndex =
+		selectedSpanId === null
+			? -1
+			: visible.findIndex((s) => s.spanId === selectedSpanId)
 	const out = resolveCollapseStep({
 		spans,
 		collapsed,
@@ -75,7 +83,10 @@ const step = (
 	return {
 		collapsed: out.collapsed,
 		selectedIndex: out.selectedIndex,
-		selectedSpanId: out.selectedIndex !== null ? newVisible[out.selectedIndex]?.spanId ?? null : null,
+		selectedSpanId:
+			out.selectedIndex !== null
+				? (newVisible[out.selectedIndex]?.spanId ?? null)
+				: null,
 		visibleIds: idsOf(newVisible),
 	}
 }
@@ -88,21 +99,38 @@ describe("getVisibleSpans", () => {
 	it("returns the full list when nothing is collapsed", () => {
 		const spans = buildTree()
 		expect(idsOf(getVisibleSpans(spans, new Set()))).toEqual([
-			"root", "a", "a1", "a2", "b", "b1", "b1a", "c",
+			"root",
+			"a",
+			"a1",
+			"a2",
+			"b",
+			"b1",
+			"b1a",
+			"c",
 		])
 	})
 
 	it("hides direct children of a collapsed node", () => {
 		const spans = buildTree()
 		expect(idsOf(getVisibleSpans(spans, new Set(["a"])))).toEqual([
-			"root", "a", "b", "b1", "b1a", "c",
+			"root",
+			"a",
+			"b",
+			"b1",
+			"b1a",
+			"c",
 		])
 	})
 
 	it("hides transitive descendants of a collapsed node", () => {
 		const spans = buildTree()
 		expect(idsOf(getVisibleSpans(spans, new Set(["b"])))).toEqual([
-			"root", "a", "a1", "a2", "b", "c",
+			"root",
+			"a",
+			"a1",
+			"a2",
+			"b",
+			"c",
 		])
 	})
 
@@ -114,7 +142,10 @@ describe("getVisibleSpans", () => {
 	it("handles multiple collapsed sibling subtrees", () => {
 		const spans = buildTree()
 		expect(idsOf(getVisibleSpans(spans, new Set(["a", "b"])))).toEqual([
-			"root", "a", "b", "c",
+			"root",
+			"a",
+			"b",
+			"c",
 		])
 	})
 
@@ -126,7 +157,12 @@ describe("getVisibleSpans", () => {
 	it("collapsing a node and its descendant is idempotent", () => {
 		const spans = buildTree()
 		expect(idsOf(getVisibleSpans(spans, new Set(["b", "b1"])))).toEqual([
-			"root", "a", "a1", "a2", "b", "c",
+			"root",
+			"a",
+			"a1",
+			"a2",
+			"b",
+			"c",
 		])
 	})
 })
@@ -146,12 +182,18 @@ describe("getWaterfallSuffixMetrics", () => {
 
 	it("layout reserves the suffix once and leaves the rest for the bar", () => {
 		const contentWidth = 72
-		const metrics = getWaterfallSuffixMetrics(
-			[{ spanId: "a", durationMs: 57_000 }, { spanId: "b", durationMs: 1 }],
+		const metrics = getWaterfallSuffixMetrics([
+			{ spanId: "a", durationMs: 57_000 },
+			{ spanId: "b", durationMs: 1 },
+		])
+		const { labelMaxWidth, barWidth } = getWaterfallLayout(
+			contentWidth,
+			metrics.suffixWidth,
 		)
-		const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, metrics.suffixWidth)
 		// label + 1 (gap before bar) + bar + 1 (gap before suffix) + suffix = contentWidth
-		expect(labelMaxWidth + 1 + barWidth + 1 + metrics.suffixWidth).toBe(contentWidth)
+		expect(labelMaxWidth + 1 + barWidth + 1 + metrics.suffixWidth).toBe(
+			contentWidth,
+		)
 	})
 
 	it("layout fits inside contentWidth at narrow widths without overflow", () => {
@@ -162,8 +204,13 @@ describe("getWaterfallSuffixMetrics", () => {
 		// label + 1 + bar + 1 + suffix == contentWidth.
 		for (let contentWidth = 14; contentWidth <= 120; contentWidth++) {
 			for (const suffixWidth of [3, 5, 7]) {
-				const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, suffixWidth)
-				expect(labelMaxWidth + 1 + barWidth + 1 + suffixWidth).toBe(contentWidth)
+				const { labelMaxWidth, barWidth } = getWaterfallLayout(
+					contentWidth,
+					suffixWidth,
+				)
+				expect(labelMaxWidth + 1 + barWidth + 1 + suffixWidth).toBe(
+					contentWidth,
+				)
 				expect(barWidth).toBeGreaterThanOrEqual(1)
 				expect(labelMaxWidth).toBeGreaterThanOrEqual(4)
 			}
@@ -183,16 +230,24 @@ describe("findParentIndex", () => {
 
 	it("returns the immediate parent index in the same list", () => {
 		const spans = buildTree()
-		expect(findParentIndex(spans, indexOfId(spans, "a1"))).toBe(indexOfId(spans, "a"))
-		expect(findParentIndex(spans, indexOfId(spans, "b1a"))).toBe(indexOfId(spans, "b1"))
-		expect(findParentIndex(spans, indexOfId(spans, "c"))).toBe(indexOfId(spans, "root"))
+		expect(findParentIndex(spans, indexOfId(spans, "a1"))).toBe(
+			indexOfId(spans, "a"),
+		)
+		expect(findParentIndex(spans, indexOfId(spans, "b1a"))).toBe(
+			indexOfId(spans, "b1"),
+		)
+		expect(findParentIndex(spans, indexOfId(spans, "c"))).toBe(
+			indexOfId(spans, "root"),
+		)
 	})
 
 	it("works against a filtered (visible) list — parent is the nearest shallower ancestor before index", () => {
 		const spans = buildTree()
 		const visible = getVisibleSpans(spans, new Set(["b1"]))
 		// visible: root, a, a1, a2, b, b1, c
-		expect(findParentIndex(visible, indexOfId(visible, "b1"))).toBe(indexOfId(visible, "b"))
+		expect(findParentIndex(visible, indexOfId(visible, "b1"))).toBe(
+			indexOfId(visible, "b"),
+		)
 	})
 
 	it("returns null on out-of-range index instead of crashing", () => {
@@ -213,9 +268,15 @@ describe("findParentIndex", () => {
 describe("findFirstChildIndex", () => {
 	it("returns next index when the next span is deeper", () => {
 		const spans = buildTree()
-		expect(findFirstChildIndex(spans, indexOfId(spans, "a"))).toBe(indexOfId(spans, "a1"))
-		expect(findFirstChildIndex(spans, indexOfId(spans, "b1"))).toBe(indexOfId(spans, "b1a"))
-		expect(findFirstChildIndex(spans, indexOfId(spans, "root"))).toBe(indexOfId(spans, "a"))
+		expect(findFirstChildIndex(spans, indexOfId(spans, "a"))).toBe(
+			indexOfId(spans, "a1"),
+		)
+		expect(findFirstChildIndex(spans, indexOfId(spans, "b1"))).toBe(
+			indexOfId(spans, "b1a"),
+		)
+		expect(findFirstChildIndex(spans, indexOfId(spans, "root"))).toBe(
+			indexOfId(spans, "a"),
+		)
 	})
 
 	it("returns null for leaf spans", () => {
@@ -246,7 +307,16 @@ describe("resolveCollapseStep — `right` (l / expand-or-into)", () => {
 		const r = step(spans, collapsed, "a", "right")
 		expect(r.collapsed.has("a")).toBe(false)
 		expect(r.selectedSpanId).toBe("a")
-		expect(r.visibleIds).toEqual(["root", "a", "a1", "a2", "b", "b1", "b1a", "c"])
+		expect(r.visibleIds).toEqual([
+			"root",
+			"a",
+			"a1",
+			"a2",
+			"b",
+			"b1",
+			"b1a",
+			"c",
+		])
 	})
 
 	it("on an expanded parent, walks selection into its first visible child", () => {
@@ -285,7 +355,12 @@ describe("resolveCollapseStep — `right` (l / expand-or-into)", () => {
 
 	it("when index is stale (past visible end), is a no-op rather than crashing", () => {
 		const spans = buildTree()
-		const out = resolveCollapseStep({ spans, collapsed: new Set(), selectedIndex: 999, direction: "right" })
+		const out = resolveCollapseStep({
+			spans,
+			collapsed: new Set(),
+			selectedIndex: 999,
+			direction: "right",
+		})
 		expect(out.selectedIndex).toBe(999)
 		expect(out.collapsed.size).toBe(0)
 	})
@@ -408,7 +483,10 @@ describe("resolveCollapseStep — invariants", () => {
 	it("never returns a selectedIndex that is out of the new visible range", () => {
 		const spans = buildTree()
 		// Try every (selectedSpanId, direction, collapsed-state) combination we care about.
-		const interesting: ReadonlyArray<{ collapsed: ReadonlySet<string>; selectedSpanId: string }> = [
+		const interesting: ReadonlyArray<{
+			collapsed: ReadonlySet<string>
+			selectedSpanId: string
+		}> = [
 			{ collapsed: new Set(), selectedSpanId: "root" },
 			{ collapsed: new Set(), selectedSpanId: "a" },
 			{ collapsed: new Set(), selectedSpanId: "a2" },
@@ -431,7 +509,7 @@ describe("resolveCollapseStep — invariants", () => {
 
 	it("collapsing then expanding the same node restores the original state", () => {
 		const spans = buildTree()
-		const a = step(spans, new Set(), "a", "left")           // collapse a
+		const a = step(spans, new Set(), "a", "left") // collapse a
 		const b = step(spans, a.collapsed, a.selectedSpanId!, "right") // expand a
 		expect([...b.collapsed]).toEqual([])
 		expect(b.selectedSpanId).toBe("a")

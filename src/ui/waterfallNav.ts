@@ -1,5 +1,9 @@
 import type { TraceSpanItem } from "../domain.ts"
-import { findFirstChildIndex, findParentIndex, getVisibleSpans } from "./waterfallModel.ts"
+import {
+	findFirstChildIndex,
+	findParentIndex,
+	getVisibleSpans,
+} from "./waterfallModel.ts"
 
 export type CollapseStep = {
 	readonly collapsed: ReadonlySet<string>
@@ -43,7 +47,8 @@ export const resolveCollapseStep = ({
 
 	const span = visible[selectedIndex]!
 	const fullIndex = spans.indexOf(span)
-	const hasChildren = fullIndex >= 0 && findFirstChildIndex(spans, fullIndex) !== null
+	const hasChildren =
+		fullIndex >= 0 && findFirstChildIndex(spans, fullIndex) !== null
 	const isCollapsed = collapsed.has(span.spanId)
 
 	if (direction === "right") {

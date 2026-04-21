@@ -1,7 +1,13 @@
 import { useMemo } from "react"
 import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { formatDuration, formatShortDate, formatTimestamp } from "./format.ts"
-import { AlignedHeaderLine, Divider, FilterBar, PlainLine, TextLine } from "./primitives.tsx"
+import {
+	AlignedHeaderLine,
+	Divider,
+	FilterBar,
+	PlainLine,
+	TextLine,
+} from "./primitives.tsx"
 import { WaterfallTimeline } from "./Waterfall.tsx"
 import { computeMatchingSpanIds } from "./waterfallFilter.ts"
 import { getVisibleSpans } from "./waterfallModel.ts"
@@ -49,22 +55,26 @@ export const TraceDetailsPane = ({
 	waterfallFilterText: string
 }) => {
 	const filteredSpans = useMemo(
-		() => trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : [],
+		() => (trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : []),
 		[trace, collapsedSpanIds],
 	)
 	const matchingSpanIds = useMemo(
-		() => trace ? computeMatchingSpanIds(trace.spans, waterfallFilterText) : null,
+		() =>
+			trace ? computeMatchingSpanIds(trace.spans, waterfallFilterText) : null,
 		[trace, waterfallFilterText],
 	)
 	const matchCount = matchingSpanIds?.size ?? 0
 	// Reserve 1 row for the filter bar when it's being shown so the
 	// waterfall doesn't spill into the footer.
 	const showFilterBar = waterfallFilterMode || waterfallFilterText.length > 0
-	const waterfallBodyLines = showFilterBar ? Math.max(1, bodyLines - 1) : bodyLines
+	const waterfallBodyLines = showFilterBar
+		? Math.max(1, bodyLines - 1)
+		: bodyLines
 
 	const traceMeta = trace ?? traceSummary
 	const hasTraceSelection = traceSummary !== null
-	const isLoadingTrace = hasTraceSelection && trace === null && traceStatus !== "error"
+	const isLoadingTrace =
+		hasTraceSelection && trace === null && traceStatus !== "error"
 
 	const headerTitle = "TRACE DETAILS"
 	const headerRight = traceMeta
@@ -75,20 +85,32 @@ export const TraceDetailsPane = ({
 	const headerColor = isLoadingTrace
 		? colors.count
 		: traceMeta?.isRunning
-		? colors.warning
-		: traceMeta && traceMeta.errorCount > 0
-		? colors.error
-		: colors.passing
+			? colors.warning
+			: traceMeta && traceMeta.errorCount > 0
+				? colors.error
+				: colors.passing
 
-	const dateStr = traceMeta ? `${formatShortDate(traceMeta.startedAt)} ${formatTimestamp(traceMeta.startedAt)}` : ""
+	const dateStr = traceMeta
+		? `${formatShortDate(traceMeta.startedAt)} ${formatTimestamp(traceMeta.startedAt)}`
+		: ""
 	const opLeft = traceMeta?.rootOperationName ?? ""
 	const opGap = Math.max(2, contentWidth - opLeft.length - dateStr.length)
 	const warningCount = traceMeta?.warnings.length ?? 0
 
 	return (
-		<box flexDirection="column" width={paneWidth} height={bodyLines + TRACE_DETAILS_HEADER_ROWS} overflow="hidden">
+		<box
+			flexDirection="column"
+			width={paneWidth}
+			height={bodyLines + TRACE_DETAILS_HEADER_ROWS}
+			overflow="hidden"
+		>
 			<box paddingLeft={1} paddingRight={1}>
-				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
+				<AlignedHeaderLine
+					left={headerTitle}
+					right={headerRight}
+					width={contentWidth}
+					rightFg={headerColor}
+				/>
 			</box>
 			{trace ? (
 				<>
@@ -103,7 +125,9 @@ export const TraceDetailsPane = ({
 							{warningCount > 0 ? (
 								<>
 									<span fg={colors.separator}>{SEPARATOR}</span>
-									<span fg={colors.error}>{warningCount} warning{warningCount === 1 ? "" : "s"}</span>
+									<span fg={colors.error}>
+										{warningCount} warning{warningCount === 1 ? "" : "s"}
+									</span>
 								</>
 							) : null}
 							<span fg={colors.separator}>{SEPARATOR}</span>
@@ -120,7 +144,9 @@ export const TraceDetailsPane = ({
 									<span fg={colors.muted}>{"/"}</span>
 									<span fg={colors.text}>{waterfallFilterText}</span>
 									<span fg={colors.separator}>{SEPARATOR}</span>
-									<span fg={colors.count}>{matchCount} match{matchCount === 1 ? "" : "es"}</span>
+									<span fg={colors.count}>
+										{matchCount} match{matchCount === 1 ? "" : "es"}
+									</span>
 									<span fg={colors.separator}>{SEPARATOR}</span>
 									<span fg={colors.muted}>esc clear</span>
 								</TextLine>
@@ -128,12 +154,12 @@ export const TraceDetailsPane = ({
 						</box>
 					) : null}
 					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-					<WaterfallTimeline
-						trace={trace}
-						filteredSpans={filteredSpans}
-						contentWidth={contentWidth}
-						bodyLines={waterfallBodyLines}
-						selectedSpanIndex={selectedSpanIndex}
+						<WaterfallTimeline
+							trace={trace}
+							filteredSpans={filteredSpans}
+							contentWidth={contentWidth}
+							bodyLines={waterfallBodyLines}
+							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
 							matchingSpanIds={matchingSpanIds}
 							onSelectSpan={onSelectSpan}
@@ -163,11 +189,17 @@ export const TraceDetailsPane = ({
 				</>
 			) : hasTraceSelection && traceStatus === "error" ? (
 				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-					<PlainLine text={traceError ?? "Could not load trace."} fg={colors.error} />
+					<PlainLine
+						text={traceError ?? "Could not load trace."}
+						fg={colors.error}
+					/>
 				</box>
 			) : (
 				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-					<PlainLine text="No trace selected. Use j/k in the trace list." fg={colors.muted} />
+					<PlainLine
+						text="No trace selected. Use j/k in the trace list."
+						fg={colors.muted}
+					/>
 				</box>
 			)}
 		</box>

@@ -3,35 +3,49 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, References } from "effect"
-import { attributeFiltersFromArgs, attributeContainsFiltersFromArgs, isAttributeFilterToken, isAttributeContainsToken } from "./queryFilters.js"
+import {
+	attributeFiltersFromArgs,
+	attributeContainsFiltersFromArgs,
+	isAttributeFilterToken,
+	isAttributeContainsToken,
+} from "./queryFilters.js"
 
 describe("motel telemetry store", () => {
 	const tempDir = mkdtempSync(join(tmpdir(), "motel-test-"))
 	const dbPath = join(tempDir, "telemetry.sqlite")
 	let storeRuntime: Awaited<typeof import("./runtime.ts")>["storeRuntime"]
-	let TelemetryStore: Awaited<typeof import("./services/TelemetryStore.ts")>["TelemetryStore"]
-	let motelOpenApiSpec: Awaited<typeof import("./httpApi.ts")>["motelOpenApiSpec"]
+	let TelemetryStore: Awaited<
+		typeof import("./services/TelemetryStore.ts")
+	>["TelemetryStore"]
+	let motelOpenApiSpec: Awaited<
+		typeof import("./httpApi.ts")
+	>["motelOpenApiSpec"]
 
 	beforeAll(async () => {
 		process.env.MOTEL_OTEL_DB_PATH = dbPath
 		process.env.MOTEL_OTEL_RETENTION_HOURS = "24"
 		const suffix = `?test=${Date.now()}`
 		;({ storeRuntime } = await import(`./runtime.ts${suffix}`))
-		;({ TelemetryStore } = await import(`./services/TelemetryStore.ts${suffix}`))
+		;({ TelemetryStore } = await import(
+			`./services/TelemetryStore.ts${suffix}`
+		))
 		;({ motelOpenApiSpec } = await import(`./httpApi.ts${suffix}`))
 
 		const nowNanos = BigInt(Date.now()) * 1_000_000n
 		const oneSecond = 1_000_000_000n
 
 		const ingest = Effect.flatMap(TelemetryStore.asEffect(), (store) =>
-				Effect.flatMap(
-					store.ingestTraces({
+			Effect.flatMap(
+				store.ingestTraces({
 					resourceSpans: [
 						{
 							resource: {
 								attributes: [
 									{ key: "service.name", value: { stringValue: "test-api" } },
-									{ key: "deployment.environment.name", value: { stringValue: "local" } },
+									{
+										key: "deployment.environment.name",
+										value: { stringValue: "local" },
+									},
 								],
 							},
 							scopeSpans: [
@@ -46,7 +60,10 @@ describe("motel telemetry store", () => {
 											startTimeUnixNano: String(nowNanos),
 											endTimeUnixNano: String(nowNanos + 4n * oneSecond),
 											attributes: [
-												{ key: "sessionID", value: { stringValue: "session-1" } },
+												{
+													key: "sessionID",
+													value: { stringValue: "session-1" },
+												},
 												{ key: "modelID", value: { stringValue: "gpt-5.4" } },
 											],
 										},
@@ -70,7 +87,10 @@ describe("motel telemetry store", () => {
 							resource: {
 								attributes: [
 									{ key: "service.name", value: { stringValue: "test-api" } },
-									{ key: "deployment.environment.name", value: { stringValue: "local" } },
+									{
+										key: "deployment.environment.name",
+										value: { stringValue: "local" },
+									},
 								],
 							},
 							scopeSpans: [
@@ -86,7 +106,10 @@ describe("motel telemetry store", () => {
 											endTimeUnixNano: String(nowNanos + 12n * oneSecond),
 											status: { code: 2 },
 											attributes: [
-												{ key: "sessionID", value: { stringValue: "session-2" } },
+												{
+													key: "sessionID",
+													value: { stringValue: "session-2" },
+												},
 												{ key: "modelID", value: { stringValue: "gpt-5.4" } },
 											],
 										},
@@ -95,128 +118,265 @@ describe("motel telemetry store", () => {
 							],
 						},
 					],
+				}),
+				() =>
+					store.ingestLogs({
+						resourceLogs: [
+							{
+								resource: {
+									attributes: [
+										{ key: "service.name", value: { stringValue: "test-api" } },
+									],
+								},
+								scopeLogs: [
+									{
+										scope: { name: "app" },
+										logRecords: [
+											{
+												timeUnixNano: String(nowNanos + 500_000_000n),
+												severityText: "INFO",
+												traceId: "trace-1",
+												spanId: "child-1",
+												body: { stringValue: "tool call started" },
+												attributes: [
+													{ key: "tool", value: { stringValue: "search" } },
+												],
+											},
+											{
+												timeUnixNano: String(nowNanos + 11n * oneSecond),
+												severityText: "ERROR",
+												traceId: "trace-2",
+												spanId: "root-2",
+												body: { stringValue: "stream failed" },
+												attributes: [
+													{ key: "tool", value: { stringValue: "none" } },
+												],
+											},
+										],
+									},
+								],
+							},
+						],
 					}),
-					() => store.ingestLogs({
-					resourceLogs: [
-						{
-							resource: { attributes: [{ key: "service.name", value: { stringValue: "test-api" } }] },
-							scopeLogs: [
+			).pipe(
+				Effect.flatMap(() =>
+					Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+						store.ingestTraces({
+							resourceSpans: [
 								{
-									scope: { name: "app" },
-									logRecords: [
+									resource: {
+										attributes: [
+											{
+												key: "service.name",
+												value: { stringValue: "test-api" },
+											},
+										],
+									},
+									scopeSpans: [
 										{
-											timeUnixNano: String(nowNanos + 500_000_000n),
-											severityText: "INFO",
-											traceId: "trace-1",
-											spanId: "child-1",
-											body: { stringValue: "tool call started" },
-											attributes: [{ key: "tool", value: { stringValue: "search" } }],
-										},
-										{
-											timeUnixNano: String(nowNanos + 11n * oneSecond),
-											severityText: "ERROR",
-											traceId: "trace-2",
-											spanId: "root-2",
-											body: { stringValue: "stream failed" },
-											attributes: [{ key: "tool", value: { stringValue: "none" } }],
+											scope: { name: "ai" },
+											spans: [
+												{
+													traceId: "trace-ai",
+													spanId: "ai-stream-1",
+													name: "ai.streamText",
+													kind: 1,
+													startTimeUnixNano: String(nowNanos + 20n * oneSecond),
+													endTimeUnixNano: String(nowNanos + 40n * oneSecond),
+													attributes: [
+														{
+															key: "ai.operationId",
+															value: { stringValue: "ai.streamText" },
+														},
+														{
+															key: "ai.telemetry.functionId",
+															value: { stringValue: "session.llm" },
+														},
+														{
+															key: "ai.model.provider",
+															value: { stringValue: "openai.responses" },
+														},
+														{
+															key: "ai.model.id",
+															value: { stringValue: "gpt-5.4" },
+														},
+														{
+															key: "ai.telemetry.metadata.sessionId",
+															value: { stringValue: "ses_test123" },
+														},
+														{
+															key: "ai.telemetry.metadata.userId",
+															value: { stringValue: "kit" },
+														},
+														{
+															key: "ai.prompt.messages",
+															value: {
+																stringValue:
+																	'[{"role":"user","content":"Tell me a joke about programming"}]',
+															},
+														},
+														{
+															key: "ai.response.text",
+															value: {
+																stringValue:
+																	"Why do programmers prefer dark mode? Because light attracts bugs!",
+															},
+														},
+														{
+															key: "ai.response.finishReason",
+															value: { stringValue: "stop" },
+														},
+														{
+															key: "ai.usage.inputTokens",
+															value: { stringValue: "150" },
+														},
+														{
+															key: "ai.usage.outputTokens",
+															value: { stringValue: "42" },
+														},
+														{
+															key: "ai.usage.totalTokens",
+															value: { stringValue: "192" },
+														},
+														{
+															key: "ai.usage.cachedInputTokens",
+															value: { stringValue: "100" },
+														},
+														{
+															key: "ai.response.msToFirstChunk",
+															value: { stringValue: "500.5" },
+														},
+														{
+															key: "ai.response.msToFinish",
+															value: { stringValue: "20000" },
+														},
+													],
+												},
+												{
+													traceId: "trace-ai",
+													spanId: "ai-stream-1-do",
+													parentSpanId: "ai-stream-1",
+													name: "ai.streamText.doStream",
+													kind: 1,
+													startTimeUnixNano: String(nowNanos + 21n * oneSecond),
+													endTimeUnixNano: String(nowNanos + 39n * oneSecond),
+													attributes: [
+														{
+															key: "ai.operationId",
+															value: { stringValue: "ai.streamText.doStream" },
+														},
+														{
+															key: "ai.telemetry.functionId",
+															value: { stringValue: "session.llm" },
+														},
+														{
+															key: "ai.model.provider",
+															value: { stringValue: "openai.responses" },
+														},
+														{
+															key: "ai.model.id",
+															value: { stringValue: "gpt-5.4" },
+														},
+														{
+															key: "ai.telemetry.metadata.sessionId",
+															value: { stringValue: "ses_test123" },
+														},
+														{
+															key: "ai.prompt.messages",
+															value: {
+																stringValue:
+																	'[{"role":"user","content":"Tell me a joke about programming"}]',
+															},
+														},
+													],
+												},
+												{
+													traceId: "trace-ai",
+													spanId: "ai-tool-1",
+													parentSpanId: "ai-stream-1",
+													name: "ai.toolCall",
+													kind: 1,
+													startTimeUnixNano: String(nowNanos + 25n * oneSecond),
+													endTimeUnixNano: String(nowNanos + 26n * oneSecond),
+													attributes: [
+														{
+															key: "ai.toolCall.name",
+															value: { stringValue: "bash" },
+														},
+													],
+												},
+												{
+													traceId: "trace-ai",
+													spanId: "ai-stream-2",
+													name: "ai.generateText",
+													kind: 1,
+													startTimeUnixNano: String(nowNanos + 50n * oneSecond),
+													endTimeUnixNano: String(nowNanos + 55n * oneSecond),
+													status: { code: 2 },
+													attributes: [
+														{
+															key: "ai.operationId",
+															value: { stringValue: "ai.generateText" },
+														},
+														{
+															key: "ai.telemetry.functionId",
+															value: { stringValue: "session.llm" },
+														},
+														{
+															key: "ai.model.provider",
+															value: { stringValue: "anthropic" },
+														},
+														{
+															key: "ai.model.id",
+															value: { stringValue: "claude-opus-4" },
+														},
+														{
+															key: "ai.telemetry.metadata.sessionId",
+															value: { stringValue: "ses_test456" },
+														},
+														{
+															key: "ai.prompt.messages",
+															value: {
+																stringValue:
+																	'[{"role":"user","content":"Summarize this"}]',
+															},
+														},
+														{
+															key: "ai.response.text",
+															value: { stringValue: "Error: rate limited" },
+														},
+														{
+															key: "ai.response.finishReason",
+															value: { stringValue: "error" },
+														},
+														{
+															key: "ai.usage.inputTokens",
+															value: { stringValue: "80" },
+														},
+														{
+															key: "ai.usage.outputTokens",
+															value: { stringValue: "10" },
+														},
+														{
+															key: "ai.usage.totalTokens",
+															value: { stringValue: "90" },
+														},
+													],
+												},
+											],
 										},
 									],
 								},
 							],
-						},
-					],
-				}),
-			).pipe(Effect.flatMap(() => Effect.flatMap(TelemetryStore.asEffect(), (store) =>
-				store.ingestTraces({
-					resourceSpans: [{
-						resource: { attributes: [{ key: "service.name", value: { stringValue: "test-api" } }] },
-						scopeSpans: [{
-							scope: { name: "ai" },
-							spans: [
-								{
-									traceId: "trace-ai",
-									spanId: "ai-stream-1",
-									name: "ai.streamText",
-									kind: 1,
-									startTimeUnixNano: String(nowNanos + 20n * oneSecond),
-									endTimeUnixNano: String(nowNanos + 40n * oneSecond),
-									attributes: [
-										{ key: "ai.operationId", value: { stringValue: "ai.streamText" } },
-										{ key: "ai.telemetry.functionId", value: { stringValue: "session.llm" } },
-										{ key: "ai.model.provider", value: { stringValue: "openai.responses" } },
-										{ key: "ai.model.id", value: { stringValue: "gpt-5.4" } },
-										{ key: "ai.telemetry.metadata.sessionId", value: { stringValue: "ses_test123" } },
-										{ key: "ai.telemetry.metadata.userId", value: { stringValue: "kit" } },
-										{ key: "ai.prompt.messages", value: { stringValue: '[{"role":"user","content":"Tell me a joke about programming"}]' } },
-										{ key: "ai.response.text", value: { stringValue: "Why do programmers prefer dark mode? Because light attracts bugs!" } },
-										{ key: "ai.response.finishReason", value: { stringValue: "stop" } },
-										{ key: "ai.usage.inputTokens", value: { stringValue: "150" } },
-										{ key: "ai.usage.outputTokens", value: { stringValue: "42" } },
-										{ key: "ai.usage.totalTokens", value: { stringValue: "192" } },
-										{ key: "ai.usage.cachedInputTokens", value: { stringValue: "100" } },
-										{ key: "ai.response.msToFirstChunk", value: { stringValue: "500.5" } },
-										{ key: "ai.response.msToFinish", value: { stringValue: "20000" } },
-									],
-								},
-								{
-									traceId: "trace-ai",
-									spanId: "ai-stream-1-do",
-									parentSpanId: "ai-stream-1",
-									name: "ai.streamText.doStream",
-									kind: 1,
-									startTimeUnixNano: String(nowNanos + 21n * oneSecond),
-									endTimeUnixNano: String(nowNanos + 39n * oneSecond),
-									attributes: [
-										{ key: "ai.operationId", value: { stringValue: "ai.streamText.doStream" } },
-										{ key: "ai.telemetry.functionId", value: { stringValue: "session.llm" } },
-										{ key: "ai.model.provider", value: { stringValue: "openai.responses" } },
-										{ key: "ai.model.id", value: { stringValue: "gpt-5.4" } },
-										{ key: "ai.telemetry.metadata.sessionId", value: { stringValue: "ses_test123" } },
-										{ key: "ai.prompt.messages", value: { stringValue: '[{"role":"user","content":"Tell me a joke about programming"}]' } },
-									],
-								},
-								{
-									traceId: "trace-ai",
-									spanId: "ai-tool-1",
-									parentSpanId: "ai-stream-1",
-									name: "ai.toolCall",
-									kind: 1,
-									startTimeUnixNano: String(nowNanos + 25n * oneSecond),
-									endTimeUnixNano: String(nowNanos + 26n * oneSecond),
-									attributes: [
-										{ key: "ai.toolCall.name", value: { stringValue: "bash" } },
-									],
-								},
-								{
-									traceId: "trace-ai",
-									spanId: "ai-stream-2",
-									name: "ai.generateText",
-									kind: 1,
-									startTimeUnixNano: String(nowNanos + 50n * oneSecond),
-									endTimeUnixNano: String(nowNanos + 55n * oneSecond),
-									status: { code: 2 },
-									attributes: [
-										{ key: "ai.operationId", value: { stringValue: "ai.generateText" } },
-										{ key: "ai.telemetry.functionId", value: { stringValue: "session.llm" } },
-										{ key: "ai.model.provider", value: { stringValue: "anthropic" } },
-										{ key: "ai.model.id", value: { stringValue: "claude-opus-4" } },
-										{ key: "ai.telemetry.metadata.sessionId", value: { stringValue: "ses_test456" } },
-										{ key: "ai.prompt.messages", value: { stringValue: '[{"role":"user","content":"Summarize this"}]' } },
-										{ key: "ai.response.text", value: { stringValue: "Error: rate limited" } },
-										{ key: "ai.response.finishReason", value: { stringValue: "error" } },
-										{ key: "ai.usage.inputTokens", value: { stringValue: "80" } },
-										{ key: "ai.usage.outputTokens", value: { stringValue: "10" } },
-										{ key: "ai.usage.totalTokens", value: { stringValue: "90" } },
-									],
-								},
-							],
-						}],
-					}],
-				}),
-			))),
+						}),
+					),
+				),
+			),
 		)
 
-		await storeRuntime.runPromise(ingest.pipe(Effect.provideService(References.MinimumLogLevel, "None")))
+		await storeRuntime.runPromise(
+			ingest.pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
 	})
 
 	afterAll(() => {
@@ -242,9 +402,9 @@ describe("motel telemetry store", () => {
 
 	it("looks up a span directly by spanId", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.getSpan("child-1")).pipe(
-				Effect.provideService(References.MinimumLogLevel, "None"),
-			),
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.getSpan("child-1"),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
 		expect(result?.traceId).toBe("trace-1")
@@ -288,9 +448,9 @@ describe("motel telemetry store", () => {
 
 	it("lists spans for a trace", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.listTraceSpans("trace-1")).pipe(
-				Effect.provideService(References.MinimumLogLevel, "None"),
-			),
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.listTraceSpans("trace-1"),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
 		expect(result).toHaveLength(2)
@@ -505,7 +665,11 @@ describe("motel telemetry store", () => {
 	it("combines severity and body filters", async () => {
 		const result = await storeRuntime.runPromise(
 			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
-				store.searchLogs({ serviceName: "test-api", severity: "INFO", body: "tool" }),
+				store.searchLogs({
+					serviceName: "test-api",
+					severity: "INFO",
+					body: "tool",
+				}),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
@@ -589,16 +753,25 @@ describe("motel telemetry store", () => {
 	it("parses attr filters consistently for CLI-style args", () => {
 		expect(isAttributeFilterToken("attr.sessionID=sess_123")).toBe(true)
 		expect(isAttributeFilterToken("sessionID=sess_123")).toBe(false)
-		expect(attributeFiltersFromArgs(["attr.sessionID=sess_123", "attr.tool=search"])).toEqual({
+		expect(
+			attributeFiltersFromArgs(["attr.sessionID=sess_123", "attr.tool=search"]),
+		).toEqual({
 			sessionID: "sess_123",
 			tool: "search",
 		})
 	})
 
 	it("parses attrContains filters for CLI-style args", () => {
-		expect(isAttributeContainsToken("attrContains.ai.prompt=hello world")).toBe(true)
+		expect(isAttributeContainsToken("attrContains.ai.prompt=hello world")).toBe(
+			true,
+		)
 		expect(isAttributeContainsToken("attr.key=exact")).toBe(false)
-		expect(attributeContainsFiltersFromArgs(["attrContains.ai.prompt=hello", "attr.exact=match"])).toEqual({
+		expect(
+			attributeContainsFiltersFromArgs([
+				"attrContains.ai.prompt=hello",
+				"attr.exact=match",
+			]),
+		).toEqual({
 			"ai.prompt": "hello",
 		})
 	})
@@ -606,7 +779,9 @@ describe("motel telemetry store", () => {
 	it("attr filters exclude attrContains tokens", () => {
 		const mixed = ["attr.key=exact", "attrContains.key=substring"]
 		expect(attributeFiltersFromArgs(mixed)).toEqual({ key: "exact" })
-		expect(attributeContainsFiltersFromArgs(mixed)).toEqual({ key: "substring" })
+		expect(attributeContainsFiltersFromArgs(mixed)).toEqual({
+			key: "substring",
+		})
 	})
 
 	// AI Call tests

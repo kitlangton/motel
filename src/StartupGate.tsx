@@ -3,7 +3,12 @@ import { RGBA, TextAttributes } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useState } from "react"
 import { App } from "./App.js"
-import { createDaemonManager, ensureManagedDaemon, getManagedDaemonStatus, type DaemonStatus } from "./daemon.js"
+import {
+	createDaemonManager,
+	ensureManagedDaemon,
+	getManagedDaemonStatus,
+	type DaemonStatus,
+} from "./daemon.js"
 import { MOTEL_SERVICE_ID } from "./registry.js"
 import { Divider, PlainLine, TextLine } from "./ui/primitives.tsx"
 import { colors } from "./ui/theme.ts"
@@ -56,7 +61,9 @@ const parsePort = (url: string) => {
 	}
 }
 
-const isRecoverableConflict = (status: DaemonStatus | null): status is ConflictStatus =>
+const isRecoverableConflict = (
+	status: DaemonStatus | null,
+): status is ConflictStatus =>
 	status !== null &&
 	status.service === MOTEL_SERVICE_ID &&
 	status.pid !== null &&
@@ -74,16 +81,36 @@ const stopConflictingDaemon = async (status: ConflictStatus) => {
 	await Effect.runPromise(manager.stop)
 }
 
-const LoadingScreen = ({ width, height, message }: { width: number; height: number; message: string }) => {
+const LoadingScreen = ({
+	width,
+	height,
+	message,
+}: {
+	width: number
+	height: number
+	message: string
+}) => {
 	const panelWidth = Math.min(76, Math.max(50, width - 8))
 	const left = Math.max(0, Math.floor((width - panelWidth) / 2))
 	const top = Math.max(0, Math.floor((height - 5) / 2))
 
 	return (
-		<box width={width} height={height} backgroundColor={RGBA.fromHex(colors.screenBg)}>
-			<box position="absolute" left={left} top={top} width={panelWidth} flexDirection="column">
+		<box
+			width={width}
+			height={height}
+			backgroundColor={RGBA.fromHex(colors.screenBg)}
+		>
+			<box
+				position="absolute"
+				left={left}
+				top={top}
+				width={panelWidth}
+				flexDirection="column"
+			>
 				<TextLine>
-					<span fg={colors.accent} attributes={TextAttributes.BOLD}>MOTEL</span>
+					<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+						MOTEL
+					</span>
 					<span fg={colors.separator}>{" · "}</span>
 					<span fg={colors.muted}>starting up...</span>
 				</TextLine>
@@ -123,12 +150,26 @@ const RecoveryScreen = ({
 	const top = Math.max(0, Math.floor((height - bodyHeight) / 2))
 
 	return (
-		<box width={width} height={height} backgroundColor={RGBA.fromHex(colors.screenBg)}>
-			<box position="absolute" left={left} top={top} width={panelWidth} flexDirection="column">
+		<box
+			width={width}
+			height={height}
+			backgroundColor={RGBA.fromHex(colors.screenBg)}
+		>
+			<box
+				position="absolute"
+				left={left}
+				top={top}
+				width={panelWidth}
+				flexDirection="column"
+			>
 				<TextLine>
-					<span fg={colors.accent} attributes={TextAttributes.BOLD}>MOTEL</span>
+					<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+						MOTEL
+					</span>
 					<span fg={colors.separator}>{" · "}</span>
-					<span fg={colors.error} attributes={TextAttributes.BOLD}>{title}</span>
+					<span fg={colors.error} attributes={TextAttributes.BOLD}>
+						{title}
+					</span>
 				</TextLine>
 				<Divider width={panelWidth} />
 				<box paddingTop={1} paddingBottom={1} flexDirection="column">
@@ -143,15 +184,32 @@ const RecoveryScreen = ({
 						const prefix = selected ? ">" : " "
 						const text = `${prefix} [${action.key}] ${action.label}${action.disabled ? " (unavailable)" : ""}`
 						return (
-							<TextLine key={action.key} bg={selected ? colors.selectedBg : undefined}>
-								<span fg={selected ? colors.selectedText : colors.text}>{text}</span>
+							<TextLine
+								key={action.key}
+								bg={selected ? colors.selectedBg : undefined}
+							>
+								<span fg={selected ? colors.selectedText : colors.text}>
+									{text}
+								</span>
 							</TextLine>
 						)
 					})}
 				</box>
 				<box paddingTop={1} flexDirection="column">
-					{notice ? <PlainLine text={notice} fg={busy ? colors.warning : colors.count} /> : null}
-					<PlainLine text={busy ? "Working..." : "j/k or ↑↓ select · enter run · r retry · k kill conflicting daemon · q quit"} fg={colors.count} />
+					{notice ? (
+						<PlainLine
+							text={notice}
+							fg={busy ? colors.warning : colors.count}
+						/>
+					) : null}
+					<PlainLine
+						text={
+							busy
+								? "Working..."
+								: "j/k or ↑↓ select · enter run · r retry · k kill conflicting daemon · q quit"
+						}
+						fg={colors.count}
+					/>
 				</box>
 			</box>
 		</box>
@@ -161,7 +219,10 @@ const RecoveryScreen = ({
 export const StartupGate = () => {
 	const renderer = useRenderer()
 	const { width = 100, height = 24 } = useTerminalDimensions()
-	const [startupState, setStartupState] = useState<StartupState>({ kind: "loading", message: "Checking managed daemon..." })
+	const [startupState, setStartupState] = useState<StartupState>({
+		kind: "loading",
+		message: "Checking managed daemon...",
+	})
 	const [selectedIndex, setSelectedIndex] = useState(0)
 
 	const attemptStart = async () => {
@@ -174,7 +235,13 @@ export const StartupGate = () => {
 			const status = await readStatus().catch(() => null)
 			if (isRecoverableConflict(status)) {
 				setSelectedIndex(0)
-				setStartupState({ kind: "conflict", message, status, busy: false, notice: null })
+				setStartupState({
+					kind: "conflict",
+					message,
+					status,
+					busy: false,
+					notice: null,
+				})
 				return
 			}
 			setSelectedIndex(0)
@@ -194,40 +261,68 @@ export const StartupGate = () => {
 					key: "k",
 					label: `Stop conflicting daemon (${startupState.status.pid})`,
 					run: async () => {
-						setStartupState((current) => current.kind === "conflict"
-							? { ...current, busy: true, notice: `Stopping daemon ${current.status.pid}...` }
-							: current)
+						setStartupState((current) =>
+							current.kind === "conflict"
+								? {
+										...current,
+										busy: true,
+										notice: `Stopping daemon ${current.status.pid}...`,
+									}
+								: current,
+						)
 						try {
 							await stopConflictingDaemon(startupState.status)
 							await attemptStart()
 						} catch (error) {
-							const message = error instanceof Error ? error.message : String(error)
-							setStartupState((current) => current.kind === "conflict"
-								? { ...current, busy: false, notice: message }
-								: current)
+							const message =
+								error instanceof Error ? error.message : String(error)
+							setStartupState((current) =>
+								current.kind === "conflict"
+									? { ...current, busy: false, notice: message }
+									: current,
+							)
 						}
 					},
 				},
-				{ key: "q", label: "Quit", run: async () => { renderer.destroy() } },
+				{
+					key: "q",
+					label: "Quit",
+					run: async () => {
+						renderer.destroy()
+					},
+				},
 			]
 		}
 		if (startupState.kind === "error") {
 			return [
 				{ key: "r", label: "Retry startup", run: attemptStart },
-				{ key: "q", label: "Quit", run: async () => { renderer.destroy() } },
+				{
+					key: "q",
+					label: "Quit",
+					run: async () => {
+						renderer.destroy()
+					},
+				},
 			]
 		}
 		return []
 	}, [renderer, startupState])
 
 	useKeyboard((key) => {
-		if (startupState.kind === "ready" || startupState.kind === "loading" || key.repeated) return
+		if (
+			startupState.kind === "ready" ||
+			startupState.kind === "loading" ||
+			key.repeated
+		)
+			return
 		if (key.name === "q" || (key.ctrl && key.name === "c")) {
 			renderer.destroy()
 			return
 		}
 		if (key.name === "up" || key.name === "k") {
-			setSelectedIndex((current) => (current + actions.length - 1) % actions.length)
+			setSelectedIndex(
+				(current) => (current + actions.length - 1) % actions.length,
+			)
 			return
 		}
 		if (key.name === "down" || key.name === "j") {
@@ -248,7 +343,14 @@ export const StartupGate = () => {
 	})
 
 	if (startupState.kind === "ready") return <App />
-	if (startupState.kind === "loading") return <LoadingScreen width={width} height={height} message={startupState.message} />
+	if (startupState.kind === "loading")
+		return (
+			<LoadingScreen
+				width={width}
+				height={height}
+				message={startupState.message}
+			/>
+		)
 	if (startupState.kind === "conflict") {
 		const status = startupState.status
 		const detailLines = [
@@ -256,7 +358,8 @@ export const StartupGate = () => {
 			`Conflicting workdir: ${status.workdir}`,
 			`Conflicting pid: ${status.pid}`,
 			`Database: ${status.databasePath}`,
-			status.workdir.startsWith("/tmp") || status.workdir.startsWith("/private/tmp")
+			status.workdir.startsWith("/tmp") ||
+			status.workdir.startsWith("/private/tmp")
 				? "This looks like a temp/test daemon."
 				: "This looks like a real motel daemon started from another project.",
 		]

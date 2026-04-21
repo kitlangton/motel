@@ -20,7 +20,11 @@ const SESSION = `motel-sort-${Date.now()}`
 
 const hasTuistory = async () => {
 	try {
-		const proc = Bun.spawn({ cmd: ["which", TUISTORY_BIN], stdout: "pipe", stderr: "ignore" })
+		const proc = Bun.spawn({
+			cmd: ["which", TUISTORY_BIN],
+			stdout: "pipe",
+			stderr: "ignore",
+		})
 		return (await proc.exited) === 0
 	} catch {
 		return false
@@ -28,7 +32,11 @@ const hasTuistory = async () => {
 }
 
 const tui = async (args: readonly string[]) => {
-	const proc = Bun.spawn({ cmd: [TUISTORY_BIN, ...args], stdout: "pipe", stderr: "pipe" })
+	const proc = Bun.spawn({
+		cmd: [TUISTORY_BIN, ...args],
+		stdout: "pipe",
+		stderr: "pipe",
+	})
 	const [stdout, stderr] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
@@ -36,7 +44,8 @@ const tui = async (args: readonly string[]) => {
 	return { code: await proc.exited, stdout, stderr }
 }
 
-const snapshot = async () => (await tui(["snapshot", "--session", SESSION])).stdout
+const snapshot = async () =>
+	(await tui(["snapshot", "--session", SESSION])).stdout
 
 const press = async (...keys: string[]) => {
 	await tui(["press", "--session", SESSION, ...keys])
@@ -51,14 +60,18 @@ const press = async (...keys: string[]) => {
  * preserve background color, so the visual "selected row" marker in
  * TraceList isn't visible — we use the right pane as the source of truth.
  */
-const listRows = (snap: string): { readonly rows: readonly string[]; readonly selected: string | null } => {
+const listRows = (
+	snap: string,
+): { readonly rows: readonly string[]; readonly selected: string | null } => {
 	const rows: string[] = []
 	let selected: string | null = null
 	let inDetailsPane = false
 	let detailsLinesConsumed = 0
 	for (const raw of snap.split("\n")) {
 		const leftHalf = raw.split("\u2502")[0] ?? raw
-		const rightHalf = raw.includes("\u2502") ? raw.split("\u2502").slice(1).join("\u2502") : ""
+		const rightHalf = raw.includes("\u2502")
+			? raw.split("\u2502").slice(1).join("\u2502")
+			: ""
 
 		// Trace rows: left pane, `·` then the operation name as the first
 		// token. (Earlier versions appended `#<hash>`; that's been removed.)
@@ -67,7 +80,10 @@ const listRows = (snap: string): { readonly rows: readonly string[]; readonly se
 
 		// Selected trace: right pane, line immediately after `TRACE DETAILS`
 		// header holds the selected root operation name.
-		if (rightHalf.includes("TRACE DETAILS") || leftHalf.includes("TRACE DETAILS")) {
+		if (
+			rightHalf.includes("TRACE DETAILS") ||
+			leftHalf.includes("TRACE DETAILS")
+		) {
 			inDetailsPane = true
 			detailsLinesConsumed = 0
 			continue
@@ -106,7 +122,11 @@ describe("trace navigation after changing sort", () => {
 		const seed = Bun.spawn({
 			cmd: ["bun", "run", "src/ui/traceSortNav.repro.seed.ts"],
 			cwd: process.cwd(),
-			env: { ...process.env, MOTEL_OTEL_DB_PATH: dbPath, MOTEL_OTEL_ENABLED: "false" },
+			env: {
+				...process.env,
+				MOTEL_OTEL_DB_PATH: dbPath,
+				MOTEL_OTEL_ENABLED: "false",
+			},
 			stdout: "pipe",
 			stderr: "pipe",
 		})
@@ -123,13 +143,20 @@ describe("trace navigation after changing sort", () => {
 		const launch = await tui([
 			"launch",
 			"bun run src/index.tsx",
-			"--session", SESSION,
-			"--cols", "120",
-			"--rows", "20",
-			"--cwd", process.cwd(),
-			"--env", `MOTEL_OTEL_DB_PATH=${dbPath}`,
-			"--env", "MOTEL_OTEL_ENABLED=false",
-			"--timeout", "15000",
+			"--session",
+			SESSION,
+			"--cols",
+			"120",
+			"--rows",
+			"20",
+			"--cwd",
+			process.cwd(),
+			"--env",
+			`MOTEL_OTEL_DB_PATH=${dbPath}`,
+			"--env",
+			"MOTEL_OTEL_ENABLED=false",
+			"--timeout",
+			"15000",
 		])
 		if (launch.code !== 0) throw new Error(`launch failed: ${launch.stderr}`)
 		await tui(["wait", "opE", "--session", SESSION, "--timeout", "10000"])
@@ -138,14 +165,48 @@ describe("trace navigation after changing sort", () => {
 
 	afterAll(async () => {
 		if (canRun) await tui(["close", "--session", SESSION])
-		try { rmSync(tempDir, { recursive: true, force: true }) } catch {}
+		try {
+			rmSync(tempDir, { recursive: true, force: true })
+		} catch {}
 	})
 
 	// Expected orders given the seed (A..O):
 	//   recent : O N M L K J I H G F E D C B A   (newest first)
 	//   slowest: H L D F J B M E N I A O C G K   (durations 200..1 ms)
-	const RECENT_ORDER = ["opO", "opN", "opM", "opL", "opK", "opJ", "opI", "opH", "opG", "opF", "opE", "opD", "opC", "opB", "opA"]
-	const SLOWEST_ORDER = ["opH", "opL", "opD", "opF", "opJ", "opB", "opM", "opE", "opN", "opI", "opA", "opO", "opC", "opG", "opK"]
+	const RECENT_ORDER = [
+		"opO",
+		"opN",
+		"opM",
+		"opL",
+		"opK",
+		"opJ",
+		"opI",
+		"opH",
+		"opG",
+		"opF",
+		"opE",
+		"opD",
+		"opC",
+		"opB",
+		"opA",
+	]
+	const SLOWEST_ORDER = [
+		"opH",
+		"opL",
+		"opD",
+		"opF",
+		"opJ",
+		"opB",
+		"opM",
+		"opE",
+		"opN",
+		"opI",
+		"opA",
+		"opO",
+		"opC",
+		"opG",
+		"opK",
+	]
 
 	it("default sort is 'recent' (most recent first), selection starts at the top", async () => {
 		if (!canRun) return
@@ -189,7 +250,9 @@ describe("trace navigation after changing sort", () => {
 	it("G jumps to the bottom of the sorted list, gg to the top", async () => {
 		if (!canRun) return
 		await press("G")
-		expect(listRows(await snapshot()).selected).toBe(SLOWEST_ORDER[SLOWEST_ORDER.length - 1]!)
+		expect(listRows(await snapshot()).selected).toBe(
+			SLOWEST_ORDER[SLOWEST_ORDER.length - 1]!,
+		)
 
 		await press("g", "g")
 		expect(listRows(await snapshot()).selected).toBe(SLOWEST_ORDER[0]!)

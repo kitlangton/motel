@@ -15,7 +15,13 @@ import { wrapTextLines } from "./format.ts"
 // Roles + chunk kinds
 // ---------------------------------------------------------------------------
 
-export type Role = "system" | "user" | "assistant" | "tool" | "response" | "unknown"
+export type Role =
+	| "system"
+	| "user"
+	| "assistant"
+	| "tool"
+	| "response"
+	| "unknown"
 
 export type ChunkKind =
 	| "system"
@@ -149,22 +155,35 @@ const summarizeToolInput = (
 	inlineWidth: number,
 ): ToolSummary => {
 	const toJson = () => {
-		try { return JSON.stringify(input, null, 2) } catch { return String(input) }
+		try {
+			return JSON.stringify(input, null, 2)
+		} catch {
+			return String(input)
+		}
 	}
 	const fullJson = toJson()
 
 	if (input == null) return { inline: "", fullJson }
-	if (typeof input === "string") return { inline: shorten(input, inlineWidth), fullJson }
-	if (typeof input !== "object") return { inline: shorten(String(input), inlineWidth), fullJson }
+	if (typeof input === "string")
+		return { inline: shorten(input, inlineWidth), fullJson }
+	if (typeof input !== "object")
+		return { inline: shorten(String(input), inlineWidth), fullJson }
 
 	const obj = input as Record<string, unknown>
 
 	if (toolName === "todowrite" && Array.isArray(obj.todos)) {
-		return { inline: `${obj.todos.length} todo${obj.todos.length === 1 ? "" : "s"}`, fullJson }
+		return {
+			inline: `${obj.todos.length} todo${obj.todos.length === 1 ? "" : "s"}`,
+			fullJson,
+		}
 	}
 	if (toolName === "task" && typeof obj.description === "string") {
-		const sub = typeof obj.subagent_type === "string" ? ` [${obj.subagent_type}]` : ""
-		return { inline: shorten(`${obj.description}${sub}`, inlineWidth), fullJson }
+		const sub =
+			typeof obj.subagent_type === "string" ? ` [${obj.subagent_type}]` : ""
+		return {
+			inline: shorten(`${obj.description}${sub}`, inlineWidth),
+			fullJson,
+		}
 	}
 	if (toolName === "read" || toolName === "write" || toolName === "edit") {
 		const path = obj.filePath ?? obj.file_path ?? obj.path
@@ -176,14 +195,19 @@ const summarizeToolInput = (
 	}
 
 	const primaryValue = pickPrimaryField(obj)
-	if (primaryValue) return { inline: shorten(primaryValue, inlineWidth), fullJson }
+	if (primaryValue)
+		return { inline: shorten(primaryValue, inlineWidth), fullJson }
 
 	const compact = (() => {
 		try {
 			return JSON.stringify(
-				Object.fromEntries(Object.entries(obj).filter(([k]) => !NOISY_INPUT_KEYS.has(k))),
+				Object.fromEntries(
+					Object.entries(obj).filter(([k]) => !NOISY_INPUT_KEYS.has(k)),
+				),
 			)
-		} catch { return String(obj) }
+		} catch {
+			return String(obj)
+		}
 	})()
 	return { inline: shorten(compact, inlineWidth), fullJson }
 }
@@ -195,10 +219,19 @@ const summarizeToolInput = (
 const extractToolResultBody = (output: unknown): string => {
 	if (typeof output === "string") return output
 	if (output && typeof output === "object") {
-		const asObj = output as { readonly type?: string; readonly value?: unknown; readonly text?: unknown }
-		if (asObj.type === "text" && typeof asObj.value === "string") return asObj.value
+		const asObj = output as {
+			readonly type?: string
+			readonly value?: unknown
+			readonly text?: unknown
+		}
+		if (asObj.type === "text" && typeof asObj.value === "string")
+			return asObj.value
 		if (typeof asObj.text === "string") return asObj.text
-		try { return JSON.stringify(output, null, 2) } catch { return String(output) }
+		try {
+			return JSON.stringify(output, null, 2)
+		} catch {
+			return String(output)
+		}
 	}
 	return output == null ? "" : String(output)
 }
@@ -286,9 +319,11 @@ export const buildChunks = (
 		const content = message.content
 
 		// Skip empty messages — render-wise they'd leave a naked role header.
-		if (content == null
-			|| (typeof content === "string" && content.length === 0)
-			|| (Array.isArray(content) && content.length === 0)) {
+		if (
+			content == null ||
+			(typeof content === "string" && content.length === 0) ||
+			(Array.isArray(content) && content.length === 0)
+		) {
 			return
 		}
 
@@ -319,7 +354,12 @@ export const buildChunks = (
 			const sanitized = sanitizeText(content)
 			chunks.push({
 				id: chunkId(mi, 0),
-				kind: role === "assistant" ? "assistant-text" : role === "user" ? "user-text" : "unknown",
+				kind:
+					role === "assistant"
+						? "assistant-text"
+						: role === "user"
+							? "user-text"
+							: "unknown",
 				role,
 				messageIndex: mi,
 				partIndex: 0,
@@ -340,11 +380,18 @@ export const buildChunks = (
 			const t = (part as { readonly type?: string }).type
 
 			if (t === "text") {
-				const text = sanitizeText((part as { readonly text?: string }).text ?? "")
+				const text = sanitizeText(
+					(part as { readonly text?: string }).text ?? "",
+				)
 				if (!text) return
 				chunks.push({
 					id: chunkId(mi, pi),
-					kind: role === "assistant" ? "assistant-text" : role === "user" ? "user-text" : "unknown",
+					kind:
+						role === "assistant"
+							? "assistant-text"
+							: role === "user"
+								? "user-text"
+								: "unknown",
 					role,
 					messageIndex: mi,
 					partIndex: pi,
@@ -359,7 +406,9 @@ export const buildChunks = (
 			}
 
 			if (t === "reasoning") {
-				const text = sanitizeText((part as { readonly text?: string }).text ?? "")
+				const text = sanitizeText(
+					(part as { readonly text?: string }).text ?? "",
+				)
 				if (!text) return
 				chunks.push({
 					id: chunkId(mi, pi),
@@ -398,7 +447,9 @@ export const buildChunks = (
 					headerMeta: null,
 					body: summary.fullJson,
 					needsHeader: true,
-					collapsible: summary.fullJson.length > 0 && summary.fullJson.length > summary.inline.length,
+					collapsible:
+						summary.fullJson.length > 0 &&
+						summary.fullJson.length > summary.inline.length,
 					collapsedByDefault: true,
 					toolName: name,
 					toolCallId: tc.toolCallId,
@@ -422,14 +473,15 @@ export const buildChunks = (
 					messageIndex: mi,
 					partIndex: pi,
 					header: `\u2190 ${name}`,
-					headerMeta: body.length > 0
-						? `${formatKilo(body.length)} chars`
-						: "(empty)",
+					headerMeta:
+						body.length > 0 ? `${formatKilo(body.length)} chars` : "(empty)",
 					body,
 					needsHeader: true,
 					collapsible: body.length > 0,
 					// Long results collapse by default; short ones inline.
-					collapsedByDefault: body.length > 240 || body.split("\n").length > TOOL_RESULT_PREVIEW_LINES,
+					collapsedByDefault:
+						body.length > 240 ||
+						body.split("\n").length > TOOL_RESULT_PREVIEW_LINES,
 					toolName: name,
 					toolCallId: tr.toolCallId,
 				})
@@ -438,7 +490,11 @@ export const buildChunks = (
 
 			// Unknown content-part type.
 			let body = ""
-			try { body = JSON.stringify(part, null, 2) } catch { body = String(part) }
+			try {
+				body = JSON.stringify(part, null, 2)
+			} catch {
+				body = String(part)
+			}
 			chunks.push({
 				id: chunkId(mi, pi),
 				kind: "unknown",
@@ -492,17 +548,21 @@ const toolRowPreview = (text: string, width = 40) => {
  * line as the row text; structured chunks (tool call/result, reasoning,
  * system) use their explicit header.
  */
-export const buildChatListRows = (chunks: readonly Chunk[]): readonly ChatListRow[] => {
+export const buildChatListRows = (
+	chunks: readonly Chunk[],
+): readonly ChatListRow[] => {
 	const rows: ChatListRow[] = []
 	const toolCallById = new Map<string, Chunk>()
 	for (const chunk of chunks) {
-		if (chunk.kind === "tool-call" && chunk.toolCallId) toolCallById.set(chunk.toolCallId, chunk)
+		if (chunk.kind === "tool-call" && chunk.toolCallId)
+			toolCallById.set(chunk.toolCallId, chunk)
 	}
 	let prevRole: Role | null = null
 	let prevMessageIndex = -1
 
 	for (const chunk of chunks) {
-		const roleChanged = chunk.role !== prevRole || chunk.messageIndex !== prevMessageIndex
+		const roleChanged =
+			chunk.role !== prevRole || chunk.messageIndex !== prevMessageIndex
 		if (roleChanged) {
 			if (rows.length > 0) {
 				rows.push({
@@ -548,7 +608,9 @@ export const buildChatListRows = (chunks: readonly Chunk[]): readonly ChatListRo
 		}
 
 		if (chunk.kind === "tool-result") {
-			const matchingCall = chunk.toolCallId ? toolCallById.get(chunk.toolCallId) ?? null : null
+			const matchingCall = chunk.toolCallId
+				? (toolCallById.get(chunk.toolCallId) ?? null)
+				: null
 			if (matchingCall) {
 				// Carry the originating call summary into the result row so the
 				// list can answer "result of what?" without opening the modal.
@@ -591,8 +653,10 @@ export const chunkDetailTitle = (chunk: Chunk): string => {
 	if (chunk.kind === "user-text") return "USER"
 	if (chunk.kind === "assistant-text") return "ASSISTANT"
 	if (chunk.kind === "reasoning") return "REASONING"
-	if (chunk.kind === "tool-call") return chunk.toolName ? `TOOL CALL · ${chunk.toolName}` : "TOOL CALL"
-	if (chunk.kind === "tool-result") return chunk.toolName ? `TOOL RESULT · ${chunk.toolName}` : "TOOL RESULT"
+	if (chunk.kind === "tool-call")
+		return chunk.toolName ? `TOOL CALL · ${chunk.toolName}` : "TOOL CALL"
+	if (chunk.kind === "tool-result")
+		return chunk.toolName ? `TOOL RESULT · ${chunk.toolName}` : "TOOL RESULT"
 	return chunk.header.toUpperCase()
 }
 
@@ -600,7 +664,10 @@ export const chunkDetailTitle = (chunk: Chunk): string => {
  * Full wrapped body lines for the detail modal. Unlike the old in-line
  * expansion view this is always the complete chunk body, never a preview.
  */
-export const renderChunkDetailLines = (chunk: Chunk, width: number): readonly string[] => {
+export const renderChunkDetailLines = (
+	chunk: Chunk,
+	width: number,
+): readonly string[] => {
 	const usableWidth = Math.max(16, width)
 	const source = chunk.body.length > 0 ? chunk.body : chunk.header
 	return wrapTextLines(source, usableWidth, 4_000)
@@ -681,7 +748,14 @@ export const renderChunks = (
 	const lines: ChatLine[] = []
 
 	if (chunks.length === 0) {
-		return [{ kind: "empty", role: "unknown", text: "no chat content", chunkId: null }]
+		return [
+			{
+				kind: "empty",
+				role: "unknown",
+				text: "no chat content",
+				chunkId: null,
+			},
+		]
 	}
 
 	// Two visual layers:
@@ -706,10 +780,16 @@ export const renderChunks = (
 	let prevMessageIndex = -1
 
 	for (const chunk of chunks) {
-		const roleChanged = chunk.role !== prevRole || chunk.messageIndex !== prevMessageIndex
+		const roleChanged =
+			chunk.role !== prevRole || chunk.messageIndex !== prevMessageIndex
 		if (roleChanged) {
 			if (lines.length > 0) {
-				lines.push({ kind: "separator", role: "unknown", text: "", chunkId: null })
+				lines.push({
+					kind: "separator",
+					role: "unknown",
+					text: "",
+					chunkId: null,
+				})
 			}
 			lines.push({
 				kind: "role-divider",
@@ -733,10 +813,14 @@ export const renderChunks = (
 
 		if (expandedNow && chunk.body.length > 0) {
 			const bodyKind: ChatLineKind =
-				chunk.kind === "tool-call" ? "tool-call-body"
-					: chunk.kind === "tool-result" ? "tool-result-body"
-						: chunk.kind === "reasoning" ? "reasoning"
-							: chunk.kind === "unknown" ? "hint"
+				chunk.kind === "tool-call"
+					? "tool-call-body"
+					: chunk.kind === "tool-result"
+						? "tool-result-body"
+						: chunk.kind === "reasoning"
+							? "reasoning"
+							: chunk.kind === "unknown"
+								? "hint"
 								: "text"
 
 			// Text bodies hang off the role divider with a small indent
@@ -744,7 +828,11 @@ export const renderChunks = (
 			// results, reasoning) indent deeper so they're obviously
 			// subordinate to their own chunk header.
 			const indent = chunk.needsHeader ? "  " : " "
-			const wrapped = wrapTextLines(chunk.body, chunk.needsHeader ? bodyWidth : wrapWidth, 2_000)
+			const wrapped = wrapTextLines(
+				chunk.body,
+				chunk.needsHeader ? bodyWidth : wrapWidth,
+				2_000,
+			)
 			for (const line of wrapped) {
 				lines.push({
 					kind: bodyKind,
@@ -770,4 +858,5 @@ export const renderChunks = (
 export const chunkHeaderLineIndex = (
 	lines: readonly ChatLine[],
 	chunkId: string,
-): number => lines.findIndex((l) => l.kind === "chunk-header" && l.chunkId === chunkId)
+): number =>
+	lines.findIndex((l) => l.kind === "chunk-header" && l.chunkId === chunkId)

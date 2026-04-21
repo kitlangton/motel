@@ -3,7 +3,14 @@ import { useAtom } from "@effect/atom-react"
 import { useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import { formatTimestamp } from "./ui/format.ts"
-import { Divider, FooterHints, HelpModal, PlainLine, SplitDivider, TextLine } from "./ui/primitives.tsx"
+import {
+	Divider,
+	FooterHints,
+	HelpModal,
+	PlainLine,
+	SplitDivider,
+	TextLine,
+} from "./ui/primitives.tsx"
 import { useAppLayout } from "./ui/app/useAppLayout.ts"
 import { useTraceScreenData } from "./ui/app/useTraceScreenData.ts"
 import { TraceWorkspace } from "./ui/app/TraceWorkspace.tsx"
@@ -54,15 +61,20 @@ const buildHeaderModel = ({
 }) => {
 	const serviceLabel = selectedTraceService ?? "none"
 	const autoLabel = autoRefresh ? "● live" : "○ paused"
-	const attrFilterLabel = activeAttrKey && activeAttrValue
-		? `  [${activeAttrKey}=${activeAttrValue.length > 20 ? `${activeAttrValue.slice(0, 19)}…` : activeAttrValue}]`
-		: ""
+	const attrFilterLabel =
+		activeAttrKey && activeAttrValue
+			? `  [${activeAttrKey}=${activeAttrValue.length > 20 ? `${activeAttrValue.slice(0, 19)}…` : activeAttrValue}]`
+			: ""
 	const right = fetchedAt
 		? `${autoLabel}  ${formatTimestamp(fetchedAt)}`
 		: status === "loading"
 			? "loading traces..."
 			: ""
-	const leftLength = "MOTEL".length + SEPARATOR.length + serviceLabel.length + attrFilterLabel.length
+	const leftLength =
+		"MOTEL".length +
+		SEPARATOR.length +
+		serviceLabel.length +
+		attrFilterLabel.length
 	const gap = Math.max(2, headerFooterWidth - leftLength - right.length)
 
 	return {
@@ -86,12 +98,20 @@ const AppHeader = ({
 }) => (
 	<box paddingLeft={1} paddingRight={1} flexDirection="column">
 		<TextLine>
-			<span fg={colors.muted} attributes={TextAttributes.BOLD}>MOTEL</span>
+			<span fg={colors.muted} attributes={TextAttributes.BOLD}>
+				MOTEL
+			</span>
 			<span fg={colors.separator}>{SEPARATOR}</span>
 			<span fg={colors.muted}>{serviceLabel}</span>
-			{attrFilterLabel ? <span fg={colors.accent} attributes={TextAttributes.BOLD}>{attrFilterLabel}</span> : null}
+			{attrFilterLabel ? (
+				<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+					{attrFilterLabel}
+				</span>
+			) : null}
 			<span fg={colors.muted}>{" ".repeat(gap)}</span>
-			<span fg={colors.muted} attributes={TextAttributes.BOLD}>{right}</span>
+			<span fg={colors.muted} attributes={TextAttributes.BOLD}>
+				{right}
+			</span>
 		</TextLine>
 	</box>
 )
@@ -123,14 +143,30 @@ const AppFooter = ({
 
 	return (
 		<>
-			{showSplit
-				? <SplitDivider leftWidth={leftPaneWidth} junction={"┴"} rightWidth={rightPaneWidth} />
-				: <Divider width={contentWidth} />}
-			<box paddingLeft={1} paddingRight={1} flexDirection="column" height={footerHeight}>
+			{showSplit ? (
+				<SplitDivider
+					leftWidth={leftPaneWidth}
+					junction={"┴"}
+					rightWidth={rightPaneWidth}
+				/>
+			) : (
+				<Divider width={contentWidth} />
+			)}
+			<box
+				paddingLeft={1}
+				paddingRight={1}
+				flexDirection="column"
+				height={footerHeight}
+			>
 				{footerNotice ? (
 					<PlainLine text={footerNotice} fg={colors.count} />
 				) : (
-					<FooterHints spanNavActive={spanNavActive} detailView={detailView} autoRefresh={autoRefresh} width={headerFooterWidth} />
+					<FooterHints
+						spanNavActive={spanNavActive}
+						detailView={detailView}
+						autoRefresh={autoRefresh}
+						width={headerFooterWidth}
+					/>
 				)}
 			</box>
 		</>
@@ -163,7 +199,15 @@ const AppOverlays = ({
 	readonly attrFacets: AttrFacetState
 }) => (
 	<>
-		{showHelp ? <HelpModal width={width} height={height} autoRefresh={autoRefresh} themeLabel={themeLabel(selectedTheme)} onClose={() => setShowHelp(false)} /> : null}
+		{showHelp ? (
+			<HelpModal
+				width={width}
+				height={height}
+				autoRefresh={autoRefresh}
+				themeLabel={themeLabel(selectedTheme)}
+				onClose={() => setShowHelp(false)}
+			/>
+		) : null}
 		{pickerMode !== "off" ? (
 			<AttrFilterModal
 				width={width}
@@ -173,7 +217,9 @@ const AppOverlays = ({
 				selectedIndex={pickerIndex}
 				selectedKey={activeAttrKey}
 				state={attrFacets}
-				onClose={() => { /* handled via keyboard */ }}
+				onClose={() => {
+					/* handled via keyboard */
+				}}
 			/>
 		) : null}
 	</>
@@ -220,12 +266,24 @@ export const App = () => {
 	const [waterfallFilterMode] = useAtom(waterfallFilterModeAtom)
 	const [waterfallFilterText] = useAtom(waterfallFilterTextAtom)
 	const [selectedAttrIndex] = useAtom(selectedAttrIndexAtom)
-	const [selectedChatChunkId, setSelectedChatChunkId] = useAtom(selectedChatChunkIdAtom)
-	const [chatDetailChunkId, setChatDetailChunkId] = useAtom(chatDetailChunkIdAtom)
-	const [chatDetailScrollOffset, setChatDetailScrollOffset] = useAtom(chatDetailScrollOffsetAtom)
+	const [selectedChatChunkId, setSelectedChatChunkId] = useAtom(
+		selectedChatChunkIdAtom,
+	)
+	const [chatDetailChunkId, setChatDetailChunkId] = useAtom(
+		chatDetailChunkIdAtom,
+	)
+	const [chatDetailScrollOffset, setChatDetailScrollOffset] = useAtom(
+		chatDetailScrollOffsetAtom,
+	)
 	useAttrFilterPicker(activeAttrKey)
 
-	const layout = useAppLayout({ width, height, notice, detailView, selectedSpanIndex })
+	const layout = useAppLayout({
+		width,
+		height,
+		notice,
+		detailView,
+		selectedSpanIndex,
+	})
 	const {
 		contentWidth,
 		isWideLayout,
@@ -255,11 +313,14 @@ export const App = () => {
 		}, NOTICE_TIMEOUT_MS)
 	}
 
-	useEffect(() => () => {
-		if (noticeTimeoutRef.current !== null) {
-			clearTimeout(noticeTimeoutRef.current)
-		}
-	}, [setNotice])
+	useEffect(
+		() => () => {
+			if (noticeTimeoutRef.current !== null) {
+				clearTimeout(noticeTimeoutRef.current)
+			}
+		},
+		[setNotice],
+	)
 
 	useEffect(() => {
 		persistSelectedTheme(selectedTheme)
@@ -291,50 +352,89 @@ export const App = () => {
 		status: traceState.status,
 	})
 
-	const selectTraceById = useCallback((traceId: string) => {
-		const index = traceState.data.findIndex((trace) => trace.traceId === traceId)
-		if (index >= 0) setSelectedTraceIndex(index)
-	}, [setSelectedTraceIndex, traceState.data])
+	const selectTraceById = useCallback(
+		(traceId: string) => {
+			const index = traceState.data.findIndex(
+				(trace) => trace.traceId === traceId,
+			)
+			if (index >= 0) setSelectedTraceIndex(index)
+		},
+		[setSelectedTraceIndex, traceState.data],
+	)
 
 	const visibleSpans = useMemo(
-		() => selectedTrace ? getVisibleSpans(selectedTrace.spans, collapsedSpanIds) : [],
+		() =>
+			selectedTrace
+				? getVisibleSpans(selectedTrace.spans, collapsedSpanIds)
+				: [],
 		[selectedTrace, collapsedSpanIds],
 	)
 
-	const openChatChunkDetail = useCallback((chunkId: string) => {
-		setSelectedChatChunkId(chunkId)
-		setChatDetailChunkId(chunkId)
-		setChatDetailScrollOffset(0)
-	}, [setSelectedChatChunkId, setChatDetailChunkId, setChatDetailScrollOffset])
+	const openChatChunkDetail = useCallback(
+		(chunkId: string) => {
+			setSelectedChatChunkId(chunkId)
+			setChatDetailChunkId(chunkId)
+			setChatDetailScrollOffset(0)
+		},
+		[setSelectedChatChunkId, setChatDetailChunkId, setChatDetailScrollOffset],
+	)
 
 	const closeChatChunkDetail = useCallback(() => {
 		setChatDetailChunkId(null)
 		setChatDetailScrollOffset(0)
 	}, [setChatDetailChunkId, setChatDetailScrollOffset])
 
-	const selectSpan = useCallback((index: number) => {
-		if (visibleSpans.length === 0) return
-		setSelectedSpanIndex(Math.max(0, Math.min(index, visibleSpans.length - 1)))
-	}, [setSelectedSpanIndex, visibleSpans])
+	const selectSpan = useCallback(
+		(index: number) => {
+			if (visibleSpans.length === 0) return
+			setSelectedSpanIndex(
+				Math.max(0, Math.min(index, visibleSpans.length - 1)),
+			)
+		},
+		[setSelectedSpanIndex, visibleSpans],
+	)
 
-	const traceListProps = useMemo(() => ({
-		traces: filteredTraces,
-		selectedTraceId: selectedTraceSummary?.traceId ?? null,
-		status: traceState.status,
-		error: traceState.error,
-		contentWidth: leftContentWidth,
-		services: traceState.services,
-		selectedService: selectedTraceService,
-		focused: !spanNavActive,
-		filterText: filterText || undefined,
-		sortMode: traceSort,
-		totalCount: filterText ? traceState.data.length : undefined,
-		onSelectTrace: selectTraceById,
-	} as const), [filteredTraces, selectedTraceSummary?.traceId, traceState.status, traceState.error, leftContentWidth, traceState.services, selectedTraceService, spanNavActive, filterText, traceSort, traceState.data.length, selectTraceById])
+	const traceListProps = useMemo(
+		() =>
+			({
+				traces: filteredTraces,
+				selectedTraceId: selectedTraceSummary?.traceId ?? null,
+				status: traceState.status,
+				error: traceState.error,
+				contentWidth: leftContentWidth,
+				services: traceState.services,
+				selectedService: selectedTraceService,
+				focused: !spanNavActive,
+				filterText: filterText || undefined,
+				sortMode: traceSort,
+				totalCount: filterText ? traceState.data.length : undefined,
+				onSelectTrace: selectTraceById,
+			}) as const,
+		[
+			filteredTraces,
+			selectedTraceSummary?.traceId,
+			traceState.status,
+			traceState.error,
+			leftContentWidth,
+			traceState.services,
+			selectedTraceService,
+			spanNavActive,
+			filterText,
+			traceSort,
+			traceState.data.length,
+			selectTraceById,
+		],
+	)
 
-	const selectedSpan = selectedSpanIndex !== null ? visibleSpans[selectedSpanIndex] ?? null : null
+	const selectedSpan =
+		selectedSpanIndex !== null
+			? (visibleSpans[selectedSpanIndex] ?? null)
+			: null
 	const selectedSpanLogs = useMemo(
-		() => selectedSpan ? logState.data.filter((log) => log.spanId === selectedSpan.spanId) : [],
+		() =>
+			selectedSpan
+				? logState.data.filter((log) => log.spanId === selectedSpan.spanId)
+				: [],
 		[selectedSpan, logState.data],
 	)
 
@@ -348,11 +448,23 @@ export const App = () => {
 	startupBenchMark("app_render_ready")
 
 	return (
-		<box width={width ?? 100} height={height ?? 24} flexGrow={1} flexDirection="column" backgroundColor={RGBA.fromHex(colors.screenBg)}>
+		<box
+			width={width ?? 100}
+			height={height ?? 24}
+			flexGrow={1}
+			flexDirection="column"
+			backgroundColor={RGBA.fromHex(colors.screenBg)}
+		>
 			<AppHeader {...headerModel} />
-			{showSplit
-				? <SplitDivider leftWidth={leftPaneWidth} junction={"┬"} rightWidth={rightPaneWidth} />
-				: <Divider width={contentWidth} />}
+			{showSplit ? (
+				<SplitDivider
+					leftWidth={leftPaneWidth}
+					junction={"┬"}
+					rightWidth={rightPaneWidth}
+				/>
+			) : (
+				<Divider width={contentWidth} />
+			)}
 			<TraceWorkspace
 				layout={layout}
 				detailView={detailView}
@@ -383,7 +495,9 @@ export const App = () => {
 				onOpenChatChunkDetail={openChatChunkDetail}
 				onCloseChatChunkDetail={closeChatChunkDetail}
 				chatDetailScrollOffset={chatDetailScrollOffset}
-				onSetChatDetailScrollOffset={(updater) => setChatDetailScrollOffset(updater)}
+				onSetChatDetailScrollOffset={(updater) =>
+					setChatDetailScrollOffset(updater)
+				}
 				selectSpan={selectSpan}
 			/>
 			<AppFooter

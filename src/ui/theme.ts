@@ -41,28 +41,28 @@ const motelDefaultTheme: ThemeDefinition = {
 	name: "motel-default",
 	label: "Motel Default",
 	colors: {
-		screenBg: "#111120",       // oklch(0.185 0.030 282)
-		text: "#eee5d6",           // oklch(0.925 0.022 82)  — warm cream
-		muted: "#9a9181",          // oklch(0.660 0.025 82)
-		separator: "#686155",      // oklch(0.495 0.020 81)
-		accent: "#f5a41a",         // oklch(0.780 0.161 73)  — motel neon
-		error: "#f97312",          // oklch(0.705 0.187 48)
-		selectedBg: "#2b2c48",     // oklch(0.305 0.050 282) — same hue as screen
-		warning: "#facc16",        // oklch(0.861 0.173 92)
+		screenBg: "#111120", // oklch(0.185 0.030 282)
+		text: "#eee5d6", // oklch(0.925 0.022 82)  — warm cream
+		muted: "#9a9181", // oklch(0.660 0.025 82)
+		separator: "#686155", // oklch(0.495 0.020 81)
+		accent: "#f5a41a", // oklch(0.780 0.161 73)  — motel neon
+		error: "#f97312", // oklch(0.705 0.187 48)
+		selectedBg: "#2b2c48", // oklch(0.305 0.050 282) — same hue as screen
+		warning: "#facc16", // oklch(0.861 0.173 92)
 		selectedText: "#f8fafc",
-		count: "#d7c5a1",          // oklch(0.830 0.052 85)
-		passing: "#7ed5a4",        // oklch(0.805 0.110 158)
+		count: "#d7c5a1", // oklch(0.830 0.052 85)
+		passing: "#7ed5a4", // oklch(0.805 0.110 158)
 		defaultService: "#93c5fe", // oklch(0.810 0.096 252)
-		footerBg: "#04040e",       // oklch(0.115 0.025 282) — deeper than screen
-		treeLine: "#48433b",       // oklch(0.385 0.015 80)
-		previewKey: "#645d51",     // oklch(0.480 0.020 80)
+		footerBg: "#04040e", // oklch(0.115 0.025 282) — deeper than screen
+		treeLine: "#48433b", // oklch(0.385 0.015 80)
+		previewKey: "#645d51", // oklch(0.480 0.020 80)
 	},
 	waterfall: {
-		bar: "#f5a41a",            // = accent
-		barError: "#f97312",       // = error
-		barBg: "#1f1f34",          // oklch(0.250 0.040 282) — purple track (was warm)
-		barLane: "#3d3e5b",        // oklch(0.375 0.050 282)
-		barSelected: "#f3c048",    // oklch(0.832 0.145 85) — warmer amber
+		bar: "#f5a41a", // = accent
+		barError: "#f97312", // = error
+		barBg: "#1f1f34", // oklch(0.250 0.040 282) — purple track (was warm)
+		barLane: "#3d3e5b", // oklch(0.375 0.050 282)
+		barSelected: "#f3c048", // oklch(0.832 0.145 85) — warmer amber
 		barSelectedError: "#ff8c42",
 	},
 }
@@ -137,10 +137,16 @@ export type ThemeName = keyof typeof themes
 
 export const defaultThemeName: ThemeName = "tokyo-night"
 
-export const themeOrder: readonly ThemeName[] = ["tokyo-night", "catppuccin", "motel-default"]
+export const themeOrder: readonly ThemeName[] = [
+	"tokyo-night",
+	"catppuccin",
+	"motel-default",
+]
 
 export const colors: ThemeColors = { ...themes[defaultThemeName].colors }
-export const waterfallColors: ThemeWaterfallColors = { ...themes[defaultThemeName].waterfall }
+export const waterfallColors: ThemeWaterfallColors = {
+	...themes[defaultThemeName].waterfall,
+}
 
 export const applyTheme = (name: ThemeName) => {
 	const theme = themes[name] ?? themes[defaultThemeName]
@@ -154,7 +160,8 @@ export const cycleThemeName = (current: ThemeName) => {
 	return themeOrder[nextIndex] ?? themeOrder[0]
 }
 
-export const themeLabel = (name: ThemeName) => themes[name]?.label ?? themes[defaultThemeName].label
+export const themeLabel = (name: ThemeName) =>
+	themes[name]?.label ?? themes[defaultThemeName].label
 
 export const SEPARATOR = " \u00b7 "
 export const G_PREFIX_TIMEOUT_MS = 500

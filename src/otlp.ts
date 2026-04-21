@@ -92,9 +92,15 @@ export const parseAnyValue = (value: OtlpAnyValue | undefined): unknown => {
 	if (value.intValue !== undefined) return Number(value.intValue)
 	if (value.doubleValue !== undefined) return value.doubleValue
 	if (value.bytesValue !== undefined) return value.bytesValue
-	if (value.arrayValue?.values) return value.arrayValue.values.map(parseAnyValue)
+	if (value.arrayValue?.values)
+		return value.arrayValue.values.map(parseAnyValue)
 	if (value.kvlistValue?.values) {
-		return Object.fromEntries(value.kvlistValue.values.map((entry) => [entry.key, parseAnyValue(entry.value)]))
+		return Object.fromEntries(
+			value.kvlistValue.values.map((entry) => [
+				entry.key,
+				parseAnyValue(entry.value),
+			]),
+		)
 	}
 	return null
 }
@@ -102,15 +108,26 @@ export const parseAnyValue = (value: OtlpAnyValue | undefined): unknown => {
 export const stringifyValue = (value: unknown): string => {
 	if (value === null || value === undefined) return ""
 	if (typeof value === "string") return value
-	if (typeof value === "number" || typeof value === "boolean") return String(value)
+	if (typeof value === "number" || typeof value === "boolean")
+		return String(value)
 	if (Array.isArray(value)) {
-		return value.map((entry) => stringifyValue(entry)).filter((entry) => entry.length > 0).join(" ")
+		return value
+			.map((entry) => stringifyValue(entry))
+			.filter((entry) => entry.length > 0)
+			.join(" ")
 	}
 	return JSON.stringify(value)
 }
 
-export const attributeMap = (attributes: readonly OtlpKeyValue[] | undefined): Record<string, string> =>
-	Object.fromEntries((attributes ?? []).map((attribute) => [attribute.key, stringifyValue(parseAnyValue(attribute.value))]))
+export const attributeMap = (
+	attributes: readonly OtlpKeyValue[] | undefined,
+): Record<string, string> =>
+	Object.fromEntries(
+		(attributes ?? []).map((attribute) => [
+			attribute.key,
+			stringifyValue(parseAnyValue(attribute.value)),
+		]),
+	)
 
 export const nanosToMilliseconds = (value: string | undefined): number => {
 	if (!value) return 0
@@ -139,4 +156,5 @@ export const spanKindLabel = (kind: number | undefined): string | null => {
 	}
 }
 
-export const spanStatusLabel = (code: number | undefined): "ok" | "error" => (code === 2 ? "error" : "ok")
+export const spanStatusLabel = (code: number | undefined): "ok" | "error" =>
+	code === 2 ? "error" : "ok"

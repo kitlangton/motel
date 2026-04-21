@@ -23,9 +23,12 @@ import { Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
-export class IngestError extends Schema.TaggedErrorClass<IngestError>()("IngestError", {
-	message: Schema.String,
-}) {}
+export class IngestError extends Schema.TaggedErrorClass<IngestError>()(
+	"IngestError",
+	{
+		message: Schema.String,
+	},
+) {}
 
 export const IngestRpcs = RpcGroup.make(
 	Rpc.make("ingestTraces", {

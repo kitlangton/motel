@@ -14,9 +14,13 @@ import type { LoadStatus } from "./atoms.ts"
 // expansion experiment.
 // ---------------------------------------------------------------------
 /** Chunk id currently selected in the list (null = first chunk). */
-export const selectedChatChunkIdAtom = Atom.make<string | null>(null).pipe(Atom.keepAlive)
+export const selectedChatChunkIdAtom = Atom.make<string | null>(null).pipe(
+	Atom.keepAlive,
+)
 /** Chunk id whose detail modal is currently open. */
-export const chatDetailChunkIdAtom = Atom.make<string | null>(null).pipe(Atom.keepAlive)
+export const chatDetailChunkIdAtom = Atom.make<string | null>(null).pipe(
+	Atom.keepAlive,
+)
 /** Line scroll offset inside the open detail modal. */
 export const chatDetailScrollOffsetAtom = Atom.make(0).pipe(Atom.keepAlive)
 
@@ -34,10 +38,16 @@ export const initialAiCallDetailState: AiCallDetailState = {
 	error: null,
 }
 
-export const aiCallDetailStateAtom = Atom.make(initialAiCallDetailState).pipe(Atom.keepAlive)
+export const aiCallDetailStateAtom = Atom.make(initialAiCallDetailState).pipe(
+	Atom.keepAlive,
+)
 
 export const loadAiCallDetail = (spanId: string) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.getAiCall(spanId)))
+	queryRuntime.runPromise(
+		Effect.flatMap(TraceQueryService.asEffect(), (service) =>
+			service.getAiCall(spanId),
+		),
+	)
 
 // AI call detail cache: the `ai.prompt` payload can easily be 50KB+ and
 // we don't want to re-hit SQLite every time j/k moves the selection
@@ -46,11 +56,18 @@ export const loadAiCallDetail = (spanId: string) =>
 const aiCallDetailCache = new Map<string, AiCallDetail | null>()
 const aiCallDetailInflight = new Map<string, Promise<AiCallDetail | null>>()
 
-export const getCachedAiCallDetail = (spanId: string): AiCallDetail | null | undefined =>
-	aiCallDetailCache.has(spanId) ? aiCallDetailCache.get(spanId) ?? null : undefined
+export const getCachedAiCallDetail = (
+	spanId: string,
+): AiCallDetail | null | undefined =>
+	aiCallDetailCache.has(spanId)
+		? (aiCallDetailCache.get(spanId) ?? null)
+		: undefined
 
-export const ensureAiCallDetail = (spanId: string): Promise<AiCallDetail | null> => {
-	if (aiCallDetailCache.has(spanId)) return Promise.resolve(aiCallDetailCache.get(spanId) ?? null)
+export const ensureAiCallDetail = (
+	spanId: string,
+): Promise<AiCallDetail | null> => {
+	if (aiCallDetailCache.has(spanId))
+		return Promise.resolve(aiCallDetailCache.get(spanId) ?? null)
 	const existing = aiCallDetailInflight.get(spanId)
 	if (existing) return existing
 	const request = loadAiCallDetail(spanId)

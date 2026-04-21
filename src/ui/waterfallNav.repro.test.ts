@@ -28,7 +28,11 @@ const SESSION = `motel-repro-${Date.now()}`
 
 const hasTuistory = async () => {
 	try {
-		const proc = Bun.spawn({ cmd: ["which", TUISTORY_BIN], stdout: "pipe", stderr: "ignore" })
+		const proc = Bun.spawn({
+			cmd: ["which", TUISTORY_BIN],
+			stdout: "pipe",
+			stderr: "ignore",
+		})
 		const code = await proc.exited
 		return code === 0
 	} catch {
@@ -36,8 +40,14 @@ const hasTuistory = async () => {
 	}
 }
 
-const tui = async (args: readonly string[]): Promise<{ code: number; stdout: string; stderr: string }> => {
-	const proc = Bun.spawn({ cmd: [TUISTORY_BIN, ...args], stdout: "pipe", stderr: "pipe" })
+const tui = async (
+	args: readonly string[],
+): Promise<{ code: number; stdout: string; stderr: string }> => {
+	const proc = Bun.spawn({
+		cmd: [TUISTORY_BIN, ...args],
+		stdout: "pipe",
+		stderr: "pipe",
+	})
 	const [stdout, stderr] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
@@ -46,7 +56,8 @@ const tui = async (args: readonly string[]): Promise<{ code: number; stdout: str
 	return { code, stdout, stderr }
 }
 
-const snapshot = async () => (await tui(["snapshot", "--session", SESSION])).stdout
+const snapshot = async () =>
+	(await tui(["snapshot", "--session", SESSION])).stdout
 
 const press = async (...keys: string[]) => {
 	await tui(["press", "--session", SESSION, ...keys])
@@ -135,7 +146,9 @@ describe("waterfall collapse/expand (end-to-end TUI)", () => {
 				new Response(seed.stdout).text(),
 				new Response(seed.stderr).text(),
 			])
-			throw new Error(`Seed subprocess failed (${seedCode})\nstdout: ${out}\nstderr: ${err}`)
+			throw new Error(
+				`Seed subprocess failed (${seedCode})\nstdout: ${out}\nstderr: ${err}`,
+			)
 		}
 
 		// Make sure no stale session is hanging around with the same name.
@@ -146,23 +159,41 @@ describe("waterfall collapse/expand (end-to-end TUI)", () => {
 		const launch = await tui([
 			"launch",
 			"bun run src/index.tsx",
-			"--session", SESSION,
-			"--cols", "160",
-			"--rows", "40",
-			"--cwd", process.cwd(),
-			"--env", `MOTEL_OTEL_DB_PATH=${dbPath}`,
-			"--env", "MOTEL_OTEL_ENABLED=false",
-			"--timeout", "15000",
+			"--session",
+			SESSION,
+			"--cols",
+			"160",
+			"--rows",
+			"40",
+			"--cwd",
+			process.cwd(),
+			"--env",
+			`MOTEL_OTEL_DB_PATH=${dbPath}`,
+			"--env",
+			"MOTEL_OTEL_ENABLED=false",
+			"--timeout",
+			"15000",
 		])
 		if (launch.code !== 0) {
-			throw new Error(`tuistory launch failed: ${launch.stderr || launch.stdout}`)
+			throw new Error(
+				`tuistory launch failed: ${launch.stderr || launch.stdout}`,
+			)
 		}
 
 		// Wait for the trace row to appear.
-		const waitResult = await tui(["wait", "root.op", "--session", SESSION, "--timeout", "10000"])
+		const waitResult = await tui([
+			"wait",
+			"root.op",
+			"--session",
+			SESSION,
+			"--timeout",
+			"10000",
+		])
 		if (waitResult.code !== 0) {
 			const snap = (await tui(["snapshot", "--session", SESSION])).stdout
-			throw new Error(`Trace did not appear in TUI after seed.\nstderr: ${waitResult.stderr}\nstdout: ${waitResult.stdout}\nSnapshot:\n${snap}`)
+			throw new Error(
+				`Trace did not appear in TUI after seed.\nstderr: ${waitResult.stderr}\nstdout: ${waitResult.stdout}\nSnapshot:\n${snap}`,
+			)
 		}
 		await tui(["wait-idle", "--session", SESSION, "--timeout", "5000"])
 	}, 60_000)
@@ -190,10 +221,18 @@ describe("waterfall collapse/expand (end-to-end TUI)", () => {
 		const beforeText = before.join("\n")
 		// Sanity: every operation should be visible.
 		for (const op of [
-			"parent.op", "childA.op", "childB.op", "childC.op",
-			"childD.op", "childE.op", "childF.op",
-			"siblingBefore.op", "siblingAfter.op",
-			"tail.op", "tailChild.op", "tailGrandchild.op",
+			"parent.op",
+			"childA.op",
+			"childB.op",
+			"childC.op",
+			"childD.op",
+			"childE.op",
+			"childF.op",
+			"siblingBefore.op",
+			"siblingAfter.op",
+			"tail.op",
+			"tailChild.op",
+			"tailGrandchild.op",
 		]) {
 			expect(beforeText).toContain(op)
 		}
@@ -202,7 +241,14 @@ describe("waterfall collapse/expand (end-to-end TUI)", () => {
 		await press("h")
 		const collapsedText = waterfallBody(await snapshot()).join("\n")
 		expect(collapsedText).toContain("parent.op")
-		for (const child of ["childA.op", "childB.op", "childC.op", "childD.op", "childE.op", "childF.op"]) {
+		for (const child of [
+			"childA.op",
+			"childB.op",
+			"childC.op",
+			"childD.op",
+			"childE.op",
+			"childF.op",
+		]) {
 			expect(collapsedText).not.toContain(child)
 		}
 
@@ -212,7 +258,14 @@ describe("waterfall collapse/expand (end-to-end TUI)", () => {
 		const afterText = after.join("\n")
 
 		// Every child must reappear after expand.
-		for (const child of ["childA.op", "childB.op", "childC.op", "childD.op", "childE.op", "childF.op"]) {
+		for (const child of [
+			"childA.op",
+			"childB.op",
+			"childC.op",
+			"childD.op",
+			"childE.op",
+			"childF.op",
+		]) {
 			expect(afterText).toContain(child)
 		}
 		// Sibling structure must remain intact.

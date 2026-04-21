@@ -1,5 +1,9 @@
 import { FilterBar } from "../primitives.tsx"
-import { TraceListBody, TraceListHeader, type TraceListProps } from "../TraceList.tsx"
+import {
+	TraceListBody,
+	TraceListHeader,
+	type TraceListProps,
+} from "../TraceList.tsx"
 
 interface TraceListPaneProps {
 	readonly traceListProps: TraceListProps
@@ -30,7 +34,12 @@ export const TraceListPane = ({
 }: TraceListPaneProps) => {
 	const bodyRows = Math.max(1, filterMode ? bodyHeight - 1 : bodyHeight)
 	return (
-		<box height={containerHeight} flexDirection="column" paddingLeft={padding} paddingRight={0}>
+		<box
+			height={containerHeight}
+			flexDirection="column"
+			paddingLeft={padding}
+			paddingRight={0}
+		>
 			<TraceListHeader {...traceListProps} />
 			{filterMode ? <FilterBar text={filterText} width={filterWidth} /> : null}
 			<TraceListBody {...traceListProps} viewportRows={bodyRows} />

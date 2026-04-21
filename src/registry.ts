@@ -6,7 +6,8 @@ export const MOTEL_VERSION = "0.1.0"
 export const MOTEL_SERVICE_ID = "motel-local-server"
 
 const stateHome = () =>
-	process.env.XDG_STATE_HOME?.trim() || path.join(os.homedir(), ".local", "state")
+	process.env.XDG_STATE_HOME?.trim() ||
+	path.join(os.homedir(), ".local", "state")
 
 export const registryDir = () => path.join(stateHome(), "motel", "instances")
 
@@ -54,10 +55,14 @@ export const listAliveEntries = (): RegistryEntry[] => {
 			if (isAlive(entry.pid)) {
 				alive.push(entry)
 			} else {
-				try { fs.unlinkSync(full) } catch {}
+				try {
+					fs.unlinkSync(full)
+				} catch {}
 			}
 		} catch {
-			try { fs.unlinkSync(full) } catch {}
+			try {
+				fs.unlinkSync(full)
+			} catch {}
 		}
 	}
 	return alive

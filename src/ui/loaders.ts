@@ -5,10 +5,19 @@ import { LogQueryService } from "../services/LogQueryService.ts"
 import { TraceQueryService } from "../services/TraceQueryService.ts"
 
 export const loadTraceServices = () =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listServices))
+	queryRuntime.runPromise(
+		Effect.flatMap(
+			TraceQueryService.asEffect(),
+			(service) => service.listServices,
+		),
+	)
 
 export const loadRecentTraceSummaries = (serviceName: string) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listTraceSummaries(serviceName)))
+	queryRuntime.runPromise(
+		Effect.flatMap(TraceQueryService.asEffect(), (service) =>
+			service.listTraceSummaries(serviceName),
+		),
+	)
 
 /**
  * Server-side trace summary search. Accepts any combination of:
@@ -29,18 +38,41 @@ export const loadFilteredTraceSummaries = (
 		readonly aiText?: string | null
 	},
 ) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.searchTraceSummaries({
-		serviceName,
-		attributeFilters: options.attributeFilters,
-		aiText: options.aiText ?? null,
-		limit: config.otel.traceFetchLimit,
-	})))
+	queryRuntime.runPromise(
+		Effect.flatMap(TraceQueryService.asEffect(), (service) =>
+			service.searchTraceSummaries({
+				serviceName,
+				attributeFilters: options.attributeFilters,
+				aiText: options.aiText ?? null,
+				limit: config.otel.traceFetchLimit,
+			}),
+		),
+	)
 
 export const loadTraceAttributeKeys = (serviceName: string) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listFacets({ type: "traces", field: "attribute_keys", serviceName, limit: 200 })))
+	queryRuntime.runPromise(
+		Effect.flatMap(TraceQueryService.asEffect(), (service) =>
+			service.listFacets({
+				type: "traces",
+				field: "attribute_keys",
+				serviceName,
+				limit: 200,
+			}),
+		),
+	)
 
 export const loadTraceAttributeValues = (serviceName: string, key: string) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listFacets({ type: "traces", field: "attribute_values", serviceName, key, limit: 200 })))
+	queryRuntime.runPromise(
+		Effect.flatMap(TraceQueryService.asEffect(), (service) =>
+			service.listFacets({
+				type: "traces",
+				field: "attribute_values",
+				serviceName,
+				key,
+				limit: 200,
+			}),
+		),
+	)
 
 // ---------------------------------------------------------------------------
 // Facet cache (drives the `f` attribute filter picker)
@@ -66,10 +98,15 @@ const valuesKey = (service: string, key: string) => `${service}\u0000${key}`
 export const getCachedFacetKeys = (service: string): FacetCacheEntry | null =>
 	facetKeysCache.get(service) ?? null
 
-export const getCachedFacetValues = (service: string, key: string): FacetCacheEntry | null =>
+export const getCachedFacetValues = (
+	service: string,
+	key: string,
+): FacetCacheEntry | null =>
 	facetValuesCache.get(valuesKey(service, key)) ?? null
 
-export const ensureTraceAttributeKeys = (service: string): Promise<FacetCacheEntry> => {
+export const ensureTraceAttributeKeys = (
+	service: string,
+): Promise<FacetCacheEntry> => {
 	const existing = facetKeysInflight.get(service)
 	if (existing) return existing
 	const request = loadTraceAttributeKeys(service)
@@ -85,7 +122,10 @@ export const ensureTraceAttributeKeys = (service: string): Promise<FacetCacheEnt
 	return request
 }
 
-export const ensureTraceAttributeValues = (service: string, key: string): Promise<FacetCacheEntry> => {
+export const ensureTraceAttributeValues = (
+	service: string,
+	key: string,
+): Promise<FacetCacheEntry> => {
 	const cacheKey = valuesKey(service, key)
 	const existing = facetValuesInflight.get(cacheKey)
 	if (existing) return existing
@@ -111,10 +151,22 @@ export const invalidateFacetCaches = () => {
 }
 
 export const loadTraceDetail = (traceId: string) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.getTrace(traceId)))
+	queryRuntime.runPromise(
+		Effect.flatMap(TraceQueryService.asEffect(), (service) =>
+			service.getTrace(traceId),
+		),
+	)
 
 export const loadTraceLogs = (traceId: string) =>
-	queryRuntime.runPromise(Effect.flatMap(LogQueryService.asEffect(), (service) => service.listTraceLogs(traceId)))
+	queryRuntime.runPromise(
+		Effect.flatMap(LogQueryService.asEffect(), (service) =>
+			service.listTraceLogs(traceId),
+		),
+	)
 
 export const loadServiceLogs = (serviceName: string) =>
-	queryRuntime.runPromise(Effect.flatMap(LogQueryService.asEffect(), (service) => service.listRecentLogs(serviceName)))
+	queryRuntime.runPromise(
+		Effect.flatMap(LogQueryService.asEffect(), (service) =>
+			service.listRecentLogs(serviceName),
+		),
+	)

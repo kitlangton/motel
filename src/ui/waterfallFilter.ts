@@ -6,11 +6,15 @@ import type { TraceSpanItem } from "../domain.ts"
  * identifiers the user never types, so matching them just creates false
  * positives on bare tokens like "ai" or "response".
  */
-export const spanMatchesFilter = (span: TraceSpanItem, needle: string): boolean => {
+export const spanMatchesFilter = (
+	span: TraceSpanItem,
+	needle: string,
+): boolean => {
 	if (!needle) return true
 	if (span.operationName.toLowerCase().includes(needle)) return true
 	for (const value of Object.values(span.tags)) {
-		if (typeof value === "string" && value.toLowerCase().includes(needle)) return true
+		if (typeof value === "string" && value.toLowerCase().includes(needle))
+			return true
 	}
 	return false
 }
@@ -51,7 +55,7 @@ export const findAdjacentMatch = (
 	const n = filteredSpans.length
 	// Walk the ring exactly once so we wrap but never loop forever.
 	for (let step = 1; step <= n; step++) {
-		const idx = ((start + direction * step) % n + n) % n
+		const idx = (((start + direction * step) % n) + n) % n
 		const span = filteredSpans[idx]
 		if (span && matchingSpanIds.has(span.spanId)) return idx
 	}

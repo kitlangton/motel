@@ -30,13 +30,26 @@ export const useAttrFilterPicker = (selectedKey: string | null) => {
 			return
 		}
 		let cancelled = false
-		const publishReady = (key: string | null, data: readonly { readonly value: string; readonly count: number }[]) => {
+		const publishReady = (
+			key: string | null,
+			data: readonly { readonly value: string; readonly count: number }[],
+		) => {
 			setFacetState({ status: "ready", key, data, error: null })
 		}
-		const publishLoading = (key: string | null, previous: readonly { readonly value: string; readonly count: number }[] = []) => {
+		const publishLoading = (
+			key: string | null,
+			previous: readonly {
+				readonly value: string
+				readonly count: number
+			}[] = [],
+		) => {
 			setFacetState({ status: "loading", key, data: previous, error: null })
 		}
-		const publishError = (key: string | null, previous: readonly { readonly value: string; readonly count: number }[], err: unknown) => {
+		const publishError = (
+			key: string | null,
+			previous: readonly { readonly value: string; readonly count: number }[],
+			err: unknown,
+		) => {
 			setFacetState({
 				status: "error",
 				key,
@@ -82,6 +95,8 @@ export const useAttrFilterPicker = (selectedKey: string | null) => {
 			publishReady(null, [])
 		}
 
-		return () => { cancelled = true }
+		return () => {
+			cancelled = true
+		}
 	}, [pickerMode, service, selectedKey, setFacetState])
 }

@@ -55,7 +55,11 @@ describe("buildChunks", () => {
 				{
 					role: "assistant",
 					content: [
-						{ type: "tool-call", toolName: "read", input: { filePath: "/tmp/x.ts" } },
+						{
+							type: "tool-call",
+							toolName: "read",
+							input: { filePath: "/tmp/x.ts" },
+						},
 					],
 				},
 			]),
@@ -97,7 +101,13 @@ describe("buildChunks", () => {
 			makeDetail([
 				{
 					role: "assistant",
-					content: [{ type: "tool-call", toolName: "todowrite", input: { todos: [{}, {}, {}] } }],
+					content: [
+						{
+							type: "tool-call",
+							toolName: "todowrite",
+							input: { todos: [{}, {}, {}] },
+						},
+					],
 				},
 			]),
 		)
@@ -110,7 +120,12 @@ describe("buildChunks", () => {
 			makeDetail([
 				{
 					role: "user",
-					content: [{ type: "text", text: `look at data:image/png;base64,${big} thanks` }],
+					content: [
+						{
+							type: "text",
+							text: `look at data:image/png;base64,${big} thanks`,
+						},
+					],
 				},
 			]),
 		)
@@ -120,7 +135,9 @@ describe("buildChunks", () => {
 	})
 
 	it("collapses long tool results by default", () => {
-		const longOutput = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n")
+		const longOutput = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+			"\n",
+		)
 		const chunks = buildChunks(
 			makeDetail([
 				{
@@ -146,7 +163,11 @@ describe("buildChunks", () => {
 				{
 					role: "tool",
 					content: [
-						{ type: "tool-result", toolName: "bash", output: { type: "text", value: "ok" } },
+						{
+							type: "tool-result",
+							toolName: "bash",
+							output: { type: "text", value: "ok" },
+						},
 					],
 				},
 			]),
@@ -247,18 +268,22 @@ describe("renderChunks", () => {
 	it("hides bodies for collapsed chunks (no per-chunk expand hint)", () => {
 		const chunks = buildChunks(
 			makeDetail([
-				{ role: "system", content: "long system prompt here " .repeat(5) },
+				{ role: "system", content: "long system prompt here ".repeat(5) },
 				{ role: "user", content: "hi" },
 			]),
 		)
 		const lines = renderChunks(chunks, { width: 80, expanded: new Set() })
 		const systemChunkId = chunks.find((c) => c.kind === "system")!.id
-		const systemBodyLines = lines.filter((l) => l.chunkId === systemChunkId && l.kind === "text")
+		const systemBodyLines = lines.filter(
+			(l) => l.chunkId === systemChunkId && l.kind === "text",
+		)
 		// Collapsed: only the chunk-header line survives, no body text
 		// and no "enter to expand" filler (the bottom footer carries the
 		// global keyboard hint now).
 		expect(systemBodyLines.length).toBe(0)
-		const systemHeaders = lines.filter((l) => l.chunkId === systemChunkId && l.kind === "chunk-header")
+		const systemHeaders = lines.filter(
+			(l) => l.chunkId === systemChunkId && l.kind === "chunk-header",
+		)
 		expect(systemHeaders.length).toBe(1)
 	})
 
@@ -271,32 +296,39 @@ describe("renderChunks", () => {
 			]),
 		)
 		const lines = renderChunks(chunks, { width: 80, expanded: new Set() })
-		const dividers = lines.filter((l) => l.kind === "role-divider").map((l) => l.text)
+		const dividers = lines
+			.filter((l) => l.kind === "role-divider")
+			.map((l) => l.text)
 		expect(dividers).toEqual(["USER", "ASSISTANT", "USER"])
 	})
 
 	it("omits chunk-header rows for plain text chunks (user/assistant/response)", () => {
 		const chunks = buildChunks(
-			makeDetail([
-				{ role: "user", content: "hi" },
-				{ role: "assistant", content: "hello" },
-			], "final"),
+			makeDetail(
+				[
+					{ role: "user", content: "hi" },
+					{ role: "assistant", content: "hello" },
+				],
+				"final",
+			),
 		)
 		const lines = renderChunks(chunks, { width: 80, expanded: new Set() })
 		// No chunk-header rows should exist for the user-text / assistant-text / response chunks.
 		const plainTextChunkIds = chunks
-			.filter((c) => ["user-text", "assistant-text", "response"].includes(c.kind))
+			.filter((c) =>
+				["user-text", "assistant-text", "response"].includes(c.kind),
+			)
 			.map((c) => c.id)
 		const headersForPlainText = lines.filter(
-			(l) => l.kind === "chunk-header" && plainTextChunkIds.includes(l.chunkId ?? ""),
+			(l) =>
+				l.kind === "chunk-header" &&
+				plainTextChunkIds.includes(l.chunkId ?? ""),
 		)
 		expect(headersForPlainText.length).toBe(0)
 	})
 
 	it("annotates each line with its chunkId so selection can find it", () => {
-		const chunks = buildChunks(
-			makeDetail([{ role: "user", content: "hi" }]),
-		)
+		const chunks = buildChunks(makeDetail([{ role: "user", content: "hi" }]))
 		const lines = renderChunks(chunks, { width: 80, expanded: new Set() })
 		const userChunkId = chunks[0]!.id
 		const taggedLines = lines.filter((l) => l.chunkId === userChunkId)
@@ -309,11 +341,18 @@ describe("buildChatListRows", () => {
 		const chunks = buildChunks(
 			makeDetail([
 				{ role: "user", content: "hi" },
-				{ role: "assistant", content: [{ type: "tool-call", toolName: "read", input: { filePath: "/x" } }] },
+				{
+					role: "assistant",
+					content: [
+						{ type: "tool-call", toolName: "read", input: { filePath: "/x" } },
+					],
+				},
 			]),
 		)
 		const rows = buildChatListRows(chunks)
-		expect(rows.filter((r) => r.kind === "role-divider").map((r) => r.text)).toEqual(["USER", "ASSISTANT"])
+		expect(
+			rows.filter((r) => r.kind === "role-divider").map((r) => r.text),
+		).toEqual(["USER", "ASSISTANT"])
 		expect(rows.filter((r) => r.kind === "chunk").length).toBe(chunks.length)
 	})
 
@@ -321,7 +360,16 @@ describe("buildChatListRows", () => {
 		const chunks = buildChunks(
 			makeDetail([
 				{ role: "user", content: "hello there" },
-				{ role: "assistant", content: [{ type: "tool-call", toolName: "bash", input: { command: "git status" } }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool-call",
+							toolName: "bash",
+							input: { command: "git status" },
+						},
+					],
+				},
 			]),
 		)
 		const rows = buildChatListRows(chunks).filter((r) => r.kind === "chunk")
@@ -335,13 +383,27 @@ describe("buildChatListRows", () => {
 				{
 					role: "assistant",
 					content: [
-						{ type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "git status --short --branch" } },
+						{
+							type: "tool-call",
+							toolCallId: "tc-1",
+							toolName: "bash",
+							input: { command: "git status --short --branch" },
+						},
 					],
 				},
 				{
 					role: "tool",
 					content: [
-						{ type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: { type: "text", value: "## dev...origin/dev [ahead 8, behind 11]\n M src/file.ts" } },
+						{
+							type: "tool-result",
+							toolCallId: "tc-1",
+							toolName: "bash",
+							output: {
+								type: "text",
+								value:
+									"## dev...origin/dev [ahead 8, behind 11]\n M src/file.ts",
+							},
+						},
 					],
 				},
 			]),
@@ -357,13 +419,23 @@ describe("buildChatListRows", () => {
 				{
 					role: "assistant",
 					content: [
-						{ type: "tool-call", toolCallId: "tc-2", toolName: "read", input: { filePath: "/src/formatter.ts", offset: 40, limit: 80 } },
+						{
+							type: "tool-call",
+							toolCallId: "tc-2",
+							toolName: "read",
+							input: { filePath: "/src/formatter.ts", offset: 40, limit: 80 },
+						},
 					],
 				},
 				{
 					role: "tool",
 					content: [
-						{ type: "tool-result", toolCallId: "tc-2", toolName: "read", output: { type: "text", value: "1: export const x = 1" } },
+						{
+							type: "tool-result",
+							toolCallId: "tc-2",
+							toolName: "read",
+							output: { type: "text", value: "1: export const x = 1" },
+						},
 					],
 				},
 			]),
@@ -376,12 +448,27 @@ describe("buildChatListRows", () => {
 
 describe("chunkDetailTitle + renderChunkDetailLines", () => {
 	it("returns a readable modal title per kind", () => {
-		const chunks = buildChunks(makeDetail([{ role: "assistant", content: [{ type: "tool-call", toolName: "bash", input: { command: "git status" } }] }]))
+		const chunks = buildChunks(
+			makeDetail([
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool-call",
+							toolName: "bash",
+							input: { command: "git status" },
+						},
+					],
+				},
+			]),
+		)
 		expect(chunkDetailTitle(chunks[0]!)).toBe("TOOL CALL · bash")
 	})
 
 	it("wraps full detail lines for the modal", () => {
-		const chunks = buildChunks(makeDetail([{ role: "user", content: "a ".repeat(200) }]))
+		const chunks = buildChunks(
+			makeDetail([{ role: "user", content: "a ".repeat(200) }]),
+		)
 		const lines = renderChunkDetailLines(chunks[0]!, 40)
 		expect(lines.length).toBeGreaterThan(1)
 		for (const line of lines) {

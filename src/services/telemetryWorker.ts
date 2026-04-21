@@ -33,17 +33,25 @@ import { TelemetryStore, TelemetryStoreWorkerLive } from "./TelemetryStore.ts"
 // payload-size attributes, giving us visibility into how ingest is
 // splitting its time across the queue / wire / SQL stages.
 const IngestHandlers = IngestRpcs.toLayer(
-	Effect.gen(function*() {
+	Effect.gen(function* () {
 		const store = yield* TelemetryStore
 		return {
 			ingestTraces: ({ payload }) =>
-				store.ingestTraces(payload as OtlpTraceExportRequest).pipe(
-					Effect.mapError((cause) => new IngestError({ message: String(cause) })),
-				),
+				store
+					.ingestTraces(payload as OtlpTraceExportRequest)
+					.pipe(
+						Effect.mapError(
+							(cause) => new IngestError({ message: String(cause) }),
+						),
+					),
 			ingestLogs: ({ payload }) =>
-				store.ingestLogs(payload as OtlpLogExportRequest).pipe(
-					Effect.mapError((cause) => new IngestError({ message: String(cause) })),
-				),
+				store
+					.ingestLogs(payload as OtlpLogExportRequest)
+					.pipe(
+						Effect.mapError(
+							(cause) => new IngestError({ message: String(cause) }),
+						),
+					),
 		}
 	}),
 )

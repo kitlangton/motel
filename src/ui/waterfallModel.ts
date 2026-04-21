@@ -2,7 +2,10 @@ import type { LogItem, TraceSpanItem } from "../domain.ts"
 import { formatDuration } from "./format.ts"
 
 /** Filter spans to only those visible given a set of collapsed span IDs. */
-export const getVisibleSpans = (spans: readonly TraceSpanItem[], collapsedIds: ReadonlySet<string>): readonly TraceSpanItem[] => {
+export const getVisibleSpans = (
+	spans: readonly TraceSpanItem[],
+	collapsedIds: ReadonlySet<string>,
+): readonly TraceSpanItem[] => {
 	if (collapsedIds.size === 0) return spans
 	const result: TraceSpanItem[] = []
 	let skipDepth = -1
@@ -18,7 +21,10 @@ export const getVisibleSpans = (spans: readonly TraceSpanItem[], collapsedIds: R
 }
 
 /** Find the index of a span's parent in the visible list. */
-export const findParentIndex = (spans: readonly TraceSpanItem[], index: number): number | null => {
+export const findParentIndex = (
+	spans: readonly TraceSpanItem[],
+	index: number,
+): number | null => {
 	const span = spans[index]
 	if (!span || span.depth === 0) return null
 	for (let i = index - 1; i >= 0; i--) {
@@ -28,14 +34,20 @@ export const findParentIndex = (spans: readonly TraceSpanItem[], index: number):
 }
 
 /** Find the index of a span's first child in the visible list. */
-export const findFirstChildIndex = (spans: readonly TraceSpanItem[], index: number): number | null => {
+export const findFirstChildIndex = (
+	spans: readonly TraceSpanItem[],
+	index: number,
+): number | null => {
 	const span = spans[index]
 	const next = spans[index + 1]
 	if (span && next && next.depth > span.depth) return index + 1
 	return null
 }
 
-export const buildTreePrefix = (spans: readonly TraceSpanItem[], index: number): string => {
+export const buildTreePrefix = (
+	spans: readonly TraceSpanItem[],
+	index: number,
+): string => {
 	const span = spans[index]
 	if (span.depth === 0) return ""
 
@@ -67,14 +79,25 @@ export const buildTreePrefix = (spans: readonly TraceSpanItem[], index: number):
 }
 
 const INTERESTING_TAGS = [
-	"http.method", "http.url", "http.status_code", "http.route",
-	"db.system", "db.statement", "db.name",
-	"messaging.system", "messaging.destination",
-	"error", "error.message",
-	"net.peer.name", "net.peer.port",
+	"http.method",
+	"http.url",
+	"http.status_code",
+	"http.route",
+	"db.system",
+	"db.statement",
+	"db.name",
+	"messaging.system",
+	"messaging.destination",
+	"error",
+	"error.message",
+	"net.peer.name",
+	"net.peer.port",
 ] as const
 
-export const getWaterfallLayout = (contentWidth: number, suffixWidth: number) => {
+export const getWaterfallLayout = (
+	contentWidth: number,
+	suffixWidth: number,
+) => {
 	const gapsAndSuffix = suffixWidth + 2
 	const remaining = Math.max(4, contentWidth - gapsAndSuffix)
 	const labelMaxWidth = Math.max(4, Math.min(Math.floor(remaining * 0.5), 32))
@@ -102,27 +125,43 @@ export const getWaterfallColumns = (
 	contentWidth: number,
 	metrics: WaterfallSuffixMetrics,
 ) => {
-	const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, metrics.suffixWidth)
+	const { labelMaxWidth, barWidth } = getWaterfallLayout(
+		contentWidth,
+		metrics.suffixWidth,
+	)
 	return { labelMaxWidth, barWidth, suffixWidth: metrics.suffixWidth } as const
 }
 
-export const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[], maxEntries: number): Array<{ key: string; value: string; isWarning?: boolean }> => {
+export const spanPreviewEntries = (
+	span: TraceSpanItem,
+	logs: readonly LogItem[],
+	maxEntries: number,
+): Array<{ key: string; value: string; isWarning?: boolean }> => {
 	const entries = Object.entries(span.tags)
-	const interesting = entries.filter(([key]) =>
-		INTERESTING_TAGS.includes(key as (typeof INTERESTING_TAGS)[number]) || key.startsWith("error"),
+	const interesting = entries.filter(
+		([key]) =>
+			INTERESTING_TAGS.includes(key as (typeof INTERESTING_TAGS)[number]) ||
+			key.startsWith("error"),
 	)
-	const rest = entries.filter(([key]) =>
-		!INTERESTING_TAGS.includes(key as (typeof INTERESTING_TAGS)[number]) && !key.startsWith("error") && !key.startsWith("otel.") && key !== "span.kind",
+	const rest = entries.filter(
+		([key]) =>
+			!INTERESTING_TAGS.includes(key as (typeof INTERESTING_TAGS)[number]) &&
+			!key.startsWith("error") &&
+			!key.startsWith("otel.") &&
+			key !== "span.kind",
 	)
-	const tagResults: Array<{ key: string; value: string; isWarning?: boolean }> = []
+	const tagResults: Array<{ key: string; value: string; isWarning?: boolean }> =
+		[]
 	if (logs.length > 0) {
 		tagResults.push({ key: "logs", value: `${logs.length} correlated` })
 		tagResults.push({ key: "log", value: logs[0]!.body.replace(/\s+/g, " ") })
 	}
 
-	tagResults.push(...[...interesting, ...rest]
-		.slice(0, maxEntries - span.warnings.length)
-		.map(([key, value]) => ({ key, value })))
+	tagResults.push(
+		...[...interesting, ...rest]
+			.slice(0, maxEntries - span.warnings.length)
+			.map(([key, value]) => ({ key, value })),
+	)
 	for (const warning of span.warnings) {
 		tagResults.push({ key: "warning", value: warning, isWarning: true })
 	}

@@ -9,7 +9,8 @@ export const rawPromptFixture: ChatFixture = {
 	label: "raw",
 	span: makeSpan(),
 	detail: makeDetail({
-		promptMessages: "Summarise the following: a long bare prompt with no message structure. Imagine this is how an older ai-sdk version captured the conversation. It's just one opaque text blob that used to flow into the model.",
+		promptMessages:
+			"Summarise the following: a long bare prompt with no message structure. Imagine this is how an older ai-sdk version captured the conversation. It's just one opaque text blob that used to flow into the model.",
 		responseText: "Here's a one-line summary.",
 	}),
 }

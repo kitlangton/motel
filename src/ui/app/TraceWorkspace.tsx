@@ -1,12 +1,29 @@
-import { isAiSpan, type LogItem, type TraceItem, type TraceSummaryItem } from "../../domain.ts"
+import {
+	isAiSpan,
+	type LogItem,
+	type TraceItem,
+	type TraceSummaryItem,
+} from "../../domain.ts"
 import type { Chunk } from "../aiChatModel.ts"
 import { AiChatView } from "../AiChatView.tsx"
 import { formatShortDate, formatTimestamp } from "../format.ts"
-import { AlignedHeaderLine, BlankRow, Divider, SeparatorColumn, TextLine } from "../primitives.tsx"
+import {
+	AlignedHeaderLine,
+	BlankRow,
+	Divider,
+	SeparatorColumn,
+	TextLine,
+} from "../primitives.tsx"
 import { ServiceLogsView } from "../ServiceLogs.tsx"
 import { SpanContentView } from "../SpanContentView.tsx"
 import { SpanDetailPane } from "../SpanDetailPane.tsx"
-import type { AiCallDetailState, DetailView, LogState, ServiceLogState, TraceDetailState } from "../state.ts"
+import type {
+	AiCallDetailState,
+	DetailView,
+	LogState,
+	ServiceLogState,
+	TraceDetailState,
+} from "../state.ts"
 import { colors, SEPARATOR } from "../theme.ts"
 import { TraceDetailsPane } from "../TraceDetailsPane.tsx"
 import type { TraceListProps } from "../TraceList.tsx"
@@ -78,7 +95,9 @@ interface SpanDrillInSceneProps {
 	readonly onOpenChatChunkDetail: (chunkId: string) => void
 	readonly onCloseChatChunkDetail: () => void
 	readonly chatDetailScrollOffset: number
-	readonly onSetChatDetailScrollOffset: (updater: (current: number) => number) => void
+	readonly onSetChatDetailScrollOffset: (
+		updater: (current: number) => number,
+	) => void
 	readonly contentWidth: number
 	readonly bodyLines: number
 	readonly paneWidth: number
@@ -101,37 +120,40 @@ const SpanDrillInScene = ({
 	bodyLines,
 	paneWidth,
 	selectedAttrIndex,
-}: SpanDrillInSceneProps) => aiDrillIn ? (
-	<AiChatView
-		span={selectedSpan}
-		detailState={aiCallDetailState}
-		chunks={aiChatChunks}
-		selectedChunkId={selectedChatChunkId}
-		onSelectChunk={onSelectChatChunk}
-		detailChunkId={chatDetailChunkId}
-		onOpenDetail={onOpenChatChunkDetail}
-		onCloseDetail={onCloseChatChunkDetail}
-		detailScrollOffset={chatDetailScrollOffset}
-		onSetDetailScrollOffset={onSetChatDetailScrollOffset}
-		contentWidth={contentWidth}
-		bodyLines={bodyLines}
-		paneWidth={paneWidth}
-	/>
-) : (
-	<SpanContentView
-		span={selectedSpan}
-		contentWidth={contentWidth}
-		bodyLines={bodyLines}
-		paneWidth={paneWidth}
-		selectedAttrIndex={selectedAttrIndex}
-	/>
-)
+}: SpanDrillInSceneProps) =>
+	aiDrillIn ? (
+		<AiChatView
+			span={selectedSpan}
+			detailState={aiCallDetailState}
+			chunks={aiChatChunks}
+			selectedChunkId={selectedChatChunkId}
+			onSelectChunk={onSelectChatChunk}
+			detailChunkId={chatDetailChunkId}
+			onOpenDetail={onOpenChatChunkDetail}
+			onCloseDetail={onCloseChatChunkDetail}
+			detailScrollOffset={chatDetailScrollOffset}
+			onSetDetailScrollOffset={onSetChatDetailScrollOffset}
+			contentWidth={contentWidth}
+			bodyLines={bodyLines}
+			paneWidth={paneWidth}
+		/>
+	) : (
+		<SpanContentView
+			span={selectedSpan}
+			contentWidth={contentWidth}
+			bodyLines={bodyLines}
+			paneWidth={paneWidth}
+			selectedAttrIndex={selectedAttrIndex}
+		/>
+	)
 
 interface ServiceLogsSceneProps {
 	readonly selectedTraceService: string | null
 	readonly serviceLogState: ServiceLogState
 	readonly selectedServiceLogIndex: number
-	readonly setSelectedServiceLogIndex: (value: number | ((current: number) => number)) => void
+	readonly setSelectedServiceLogIndex: (
+		value: number | ((current: number) => number),
+	) => void
 	readonly headerFooterWidth: number
 	readonly availableContentHeight: number
 }
@@ -152,7 +174,9 @@ const ServiceLogsScene = ({
 			rightFg={colors.count}
 		/>
 		<TextLine>
-			<span fg={colors.defaultService}>{selectedTraceService ?? "unknown"}</span>
+			<span fg={colors.defaultService}>
+				{selectedTraceService ?? "unknown"}
+			</span>
 			<span fg={colors.separator}>{SEPARATOR}</span>
 			<span fg={colors.count}>recent logs</span>
 		</TextLine>
@@ -175,20 +199,35 @@ interface NarrowDrillInHeaderProps {
 	readonly selectedSpan: TraceItem["spans"][number] | null
 }
 
-const NarrowDrillInHeader = ({ contentWidth, viewLevel, selectedTraceSummary, selectedSpan }: NarrowDrillInHeaderProps) => (
+const NarrowDrillInHeader = ({
+	contentWidth,
+	viewLevel,
+	selectedTraceSummary,
+	selectedSpan,
+}: NarrowDrillInHeaderProps) => (
 	<>
 		<box paddingLeft={1} paddingRight={1} height={1} flexDirection="column">
 			<TextLine>
 				<span fg={colors.muted}>TRACES</span>
 				{selectedTraceSummary ? (
 					<>
-						<span fg={colors.separator}>{"  "}{SEPARATOR}{"  "}</span>
-						<span fg={viewLevel === 1 ? colors.accent : colors.muted}>{selectedTraceSummary.rootOperationName}</span>
+						<span fg={colors.separator}>
+							{"  "}
+							{SEPARATOR}
+							{"  "}
+						</span>
+						<span fg={viewLevel === 1 ? colors.accent : colors.muted}>
+							{selectedTraceSummary.rootOperationName}
+						</span>
 					</>
 				) : null}
 				{viewLevel === 2 && selectedSpan ? (
 					<>
-						<span fg={colors.separator}>{"  "}{SEPARATOR}{"  "}</span>
+						<span fg={colors.separator}>
+							{"  "}
+							{SEPARATOR}
+							{"  "}
+						</span>
 						<span fg={colors.accent}>{selectedSpan.operationName}</span>
 					</>
 				) : null}
@@ -209,7 +248,9 @@ interface TraceWorkspaceProps {
 	readonly selectedTraceService: string | null
 	readonly serviceLogState: ServiceLogState
 	readonly selectedServiceLogIndex: number
-	readonly setSelectedServiceLogIndex: (value: number | ((current: number) => number)) => void
+	readonly setSelectedServiceLogIndex: (
+		value: number | ((current: number) => number),
+	) => void
 	readonly traceDetailState: TraceDetailState
 	readonly selectedTrace: TraceItem | null
 	readonly selectedTraceSummary: TraceSummaryItem | null
@@ -228,7 +269,9 @@ interface TraceWorkspaceProps {
 	readonly onOpenChatChunkDetail: (chunkId: string) => void
 	readonly onCloseChatChunkDetail: () => void
 	readonly chatDetailScrollOffset: number
-	readonly onSetChatDetailScrollOffset: (updater: (current: number) => number) => void
+	readonly onSetChatDetailScrollOffset: (
+		updater: (current: number) => number,
+	) => void
 	readonly selectSpan: (index: number) => void
 }
 
@@ -315,7 +358,11 @@ export const TraceWorkspace = ({
 		if (viewLevel === 0) {
 			return (
 				<box flexGrow={1} flexDirection="row">
-					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
+					<box
+						width={leftPaneWidth}
+						height={wideBodyHeight}
+						flexDirection="column"
+					>
 						<TraceListPane
 							traceListProps={traceListProps}
 							filterMode={filterMode}
@@ -326,8 +373,15 @@ export const TraceWorkspace = ({
 							padding={sectionPadding}
 						/>
 					</box>
-					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorJunctionChars} />
-					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
+					<SeparatorColumn
+						height={wideBodyHeight}
+						junctionChars={separatorJunctionChars}
+					/>
+					<box
+						width={rightPaneWidth}
+						height={wideBodyHeight}
+						flexDirection="column"
+					>
 						<TraceDetailsScene
 							{...traceDetailsProps}
 							contentWidth={rightContentWidth}
@@ -342,7 +396,11 @@ export const TraceWorkspace = ({
 		if (viewLevel === 1) {
 			return (
 				<box flexGrow={1} flexDirection="row">
-					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
+					<box
+						width={leftPaneWidth}
+						height={wideBodyHeight}
+						flexDirection="column"
+					>
 						<TraceDetailsScene
 							{...traceDetailsProps}
 							contentWidth={leftContentWidth}
@@ -350,8 +408,15 @@ export const TraceWorkspace = ({
 							paneWidth={leftPaneWidth}
 						/>
 					</box>
-					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorCrossChars} />
-					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
+					<SeparatorColumn
+						height={wideBodyHeight}
+						junctionChars={separatorCrossChars}
+					/>
+					<box
+						width={rightPaneWidth}
+						height={wideBodyHeight}
+						flexDirection="column"
+					>
 						<SpanDetailPane
 							span={selectedSpan}
 							trace={selectedTrace}

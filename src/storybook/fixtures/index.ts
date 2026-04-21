@@ -13,7 +13,9 @@ export interface ChatFixture {
 	readonly detail: AiCallDetail
 }
 
-export const makeSpan = (overrides: Partial<TraceSpanItem> = {}): TraceSpanItem => ({
+export const makeSpan = (
+	overrides: Partial<TraceSpanItem> = {},
+): TraceSpanItem => ({
 	spanId: "fixture-span-0000",
 	parentSpanId: null,
 	operationName: "ai.streamText",
@@ -36,7 +38,9 @@ export const makeSpan = (overrides: Partial<TraceSpanItem> = {}): TraceSpanItem 
 	...overrides,
 })
 
-export const makeDetail = (overrides: Partial<AiCallDetail> = {}): AiCallDetail => ({
+export const makeDetail = (
+	overrides: Partial<AiCallDetail> = {},
+): AiCallDetail => ({
 	traceId: "fixture-trace-0000",
 	spanId: "fixture-span-0000",
 	operation: "streamText",
@@ -55,8 +59,18 @@ export const makeDetail = (overrides: Partial<AiCallDetail> = {}): AiCallDetail 
 	toolCalls: [],
 	toolsAvailable: null,
 	providerMetadata: null,
-	usage: { inputTokens: 1234, outputTokens: 321, totalTokens: 1555, cachedInputTokens: 0, reasoningTokens: null },
-	timing: { msToFirstChunk: null, msToFinish: null, avgOutputTokensPerSecond: null },
+	usage: {
+		inputTokens: 1234,
+		outputTokens: 321,
+		totalTokens: 1555,
+		cachedInputTokens: 0,
+		reasoningTokens: null,
+	},
+	timing: {
+		msToFirstChunk: null,
+		msToFinish: null,
+		avgOutputTokensPerSecond: null,
+	},
 	logs: [],
 	...overrides,
 })

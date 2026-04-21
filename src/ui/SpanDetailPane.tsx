@@ -1,6 +1,11 @@
 import type { LogItem, TraceItem, TraceSpanItem } from "../domain.ts"
 import { formatDuration, lifecycleLabel } from "./format.ts"
-import { AlignedHeaderLine, Divider, PlainLine, TextLine } from "./primitives.tsx"
+import {
+	AlignedHeaderLine,
+	Divider,
+	PlainLine,
+	TextLine,
+} from "./primitives.tsx"
 import { SpanDetailView } from "./SpanDetail.tsx"
 import { colors, SEPARATOR } from "./theme.ts"
 
@@ -38,14 +43,24 @@ export const SpanDetailPane = ({
 		? span.isRunning
 			? colors.warning
 			: span.status === "error"
-			? colors.error
-			: colors.passing
+				? colors.error
+				: colors.passing
 		: colors.muted
 
 	return (
-		<box flexDirection="column" width={paneWidth} height={bodyLines + SPAN_DETAIL_HEADER_ROWS} overflow="hidden">
+		<box
+			flexDirection="column"
+			width={paneWidth}
+			height={bodyLines + SPAN_DETAIL_HEADER_ROWS}
+			overflow="hidden"
+		>
 			<box paddingLeft={1} paddingRight={1}>
-				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
+				<AlignedHeaderLine
+					left={headerTitle}
+					right={headerRight}
+					width={contentWidth}
+					rightFg={headerColor}
+				/>
 			</box>
 			{span && trace ? (
 				<>
@@ -58,7 +73,9 @@ export const SpanDetailPane = ({
 							<span fg={colors.separator}>{SEPARATOR}</span>
 							<span fg={colors.muted}>{span.scopeName ?? "no scope"}</span>
 							<span fg={colors.separator}>{SEPARATOR}</span>
-							<span fg={span.isRunning ? colors.warning : colors.muted}>{lifecycleLabel(span)}</span>
+							<span fg={span.isRunning ? colors.warning : colors.muted}>
+								{lifecycleLabel(span)}
+							</span>
 							<span fg={colors.separator}>{SEPARATOR}</span>
 							<span fg={colors.muted}>{span.spanId.slice(0, 16)}</span>
 						</TextLine>
@@ -76,12 +93,19 @@ export const SpanDetailPane = ({
 			) : (
 				<>
 					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-						<TextLine><span fg={colors.muted}>—</span></TextLine>
-						<TextLine><span fg={colors.muted}>—</span></TextLine>
+						<TextLine>
+							<span fg={colors.muted}>—</span>
+						</TextLine>
+						<TextLine>
+							<span fg={colors.muted}>—</span>
+						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
 					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-						<PlainLine text="Select a span in the waterfall to view its detail." fg={colors.muted} />
+						<PlainLine
+							text="Select a span in the waterfall to view its detail."
+							fg={colors.muted}
+						/>
 					</box>
 				</>
 			)}

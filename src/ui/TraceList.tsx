@@ -1,7 +1,15 @@
 import { TextAttributes } from "@opentui/core"
 import { useLayoutEffect, useRef, useState } from "react"
 import type { TraceSummaryItem } from "../domain.ts"
-import { fitCell, formatDuration, lifecycleLabel, relativeTime, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"
+import {
+	fitCell,
+	formatDuration,
+	lifecycleLabel,
+	relativeTime,
+	traceIndicator,
+	traceIndicatorColor,
+	traceRowId,
+} from "./format.ts"
 import { BlankRow, PlainLine, TextLine } from "./primitives.tsx"
 import type { LoadStatus } from "./state.ts"
 import { colors } from "./theme.ts"
@@ -35,11 +43,16 @@ const TraceRow = ({
 	contentWidth: number
 	onSelect: () => void
 }) => {
-	const { stateWidth, durationWidth, countWidth, ageWidth, titleWidth } = getTraceRowLayout(contentWidth)
+	const { stateWidth, durationWidth, countWidth, ageWidth, titleWidth } =
+		getTraceRowLayout(contentWidth)
 	const title = trace.isRunning
 		? `${trace.rootOperationName} [${lifecycleLabel(trace)}]`
 		: trace.rootOperationName
-	const titleColor = selected ? colors.selectedText : trace.isRunning ? colors.warning : colors.text
+	const titleColor = selected
+		? colors.selectedText
+		: trace.isRunning
+			? colors.warning
+			: colors.text
 
 	// Always surface a duration, including `0ms` for sub-millisecond traces —
 	// a visible duration is easier to scan than a blank column.
@@ -47,15 +60,26 @@ const TraceRow = ({
 
 	return (
 		<box id={traceRowId(trace.traceId)} height={1} onMouseDown={onSelect}>
-			<TextLine fg={selected ? colors.selectedText : colors.text} bg={selected ? colors.selectedBg : undefined}>
-				<span fg={traceIndicatorColor(trace)}>{fitCell(traceIndicator(trace), stateWidth)}</span>
+			<TextLine
+				fg={selected ? colors.selectedText : colors.text}
+				bg={selected ? colors.selectedBg : undefined}
+			>
+				<span fg={traceIndicatorColor(trace)}>
+					{fitCell(traceIndicator(trace), stateWidth)}
+				</span>
 				<span> </span>
 				<span fg={titleColor}>{fitTraceTitle(title, titleWidth)}</span>
-				<span fg={colors.muted}>{fitCell(durationText, durationWidth, "right")}</span>
+				<span fg={colors.muted}>
+					{fitCell(durationText, durationWidth, "right")}
+				</span>
 				<span> </span>
-				<span fg={colors.muted}>{fitCell(`${trace.spanCount}sp`, countWidth, "right")}</span>
+				<span fg={colors.muted}>
+					{fitCell(`${trace.spanCount}sp`, countWidth, "right")}
+				</span>
 				<span> </span>
-				<span fg={colors.muted}>{fitCell(relativeTime(trace.startedAt), ageWidth, "right")}</span>
+				<span fg={colors.muted}>
+					{fitCell(relativeTime(trace.startedAt), ageWidth, "right")}
+				</span>
 			</TextLine>
 		</box>
 	)
@@ -94,17 +118,27 @@ export const TraceListHeader = ({
 	totalCount,
 	contentWidth,
 }: TraceListProps) => {
-	const countLabel = totalCount !== undefined && totalCount !== traces.length ? `${traces.length}/${totalCount}` : traces.length > 0 ? String(traces.length) : ""
+	const countLabel =
+		totalCount !== undefined && totalCount !== traces.length
+			? `${traces.length}/${totalCount}`
+			: traces.length > 0
+				? String(traces.length)
+				: ""
 	const metaLabel = [
 		filterText ? `filter: ${filterText}` : null,
 		sortMode && sortMode !== "recent" ? `sort: ${sortMode}` : null,
-	].filter((part): part is string => part !== null).join(" · ")
-	const serviceLabel = services.length > 1 && selectedService ? `${services.length} services` : ""
+	]
+		.filter((part): part is string => part !== null)
+		.join(" · ")
+	const serviceLabel =
+		services.length > 1 && selectedService ? `${services.length} services` : ""
 	const leftLabel = `TRACES${countLabel ? ` ${countLabel}` : ""}${metaLabel ? ` · ${metaLabel}` : ""}`
 	const gap = Math.max(2, contentWidth - leftLabel.length - serviceLabel.length)
 	return (
 		<TextLine>
-			<span fg={colors.accent} attributes={TextAttributes.BOLD}>TRACES</span>
+			<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+				TRACES
+			</span>
 			{countLabel ? <span fg={colors.muted}>{` ${countLabel}`}</span> : null}
 			{metaLabel ? <span fg={colors.muted}>{` · ${metaLabel}`}</span> : null}
 			<span fg={colors.muted}>{" ".repeat(gap)}</span>
@@ -171,7 +205,8 @@ export const TraceListBody = ({
 
 		const prevId = lastSelectedIdRef.current
 		const prevIndex = lastSelectedIndexRef.current
-		const isRefreshShift = prevId === selectedTraceId && prevIndex !== null && prevIndex !== index
+		const isRefreshShift =
+			prevId === selectedTraceId && prevIndex !== null && prevIndex !== index
 
 		setScrollOffset((current) => {
 			let next = current
@@ -197,13 +232,23 @@ export const TraceListBody = ({
 
 	// Mouse wheel moves the scroll window WITHOUT touching selection — lets
 	// the user browse ahead of / behind their selected trace freely.
-	const handleWheel = (event: { scroll?: { direction: string; delta: number }; stopPropagation?: () => void }) => {
+	const handleWheel = (event: {
+		scroll?: { direction: string; delta: number }
+		stopPropagation?: () => void
+	}) => {
 		const info = event.scroll
 		if (!info || traces.length === 0) return
 		const magnitude = Math.max(1, Math.round(info.delta))
-		const signed = info.direction === "up" ? -magnitude : info.direction === "down" ? magnitude : 0
+		const signed =
+			info.direction === "up"
+				? -magnitude
+				: info.direction === "down"
+					? magnitude
+					: 0
 		if (signed === 0) return
-		setScrollOffset((current) => Math.max(0, Math.min(current + signed, maxOffset)))
+		setScrollOffset((current) =>
+			Math.max(0, Math.min(current + signed, maxOffset)),
+		)
 		event.stopPropagation?.()
 	}
 
@@ -211,13 +256,25 @@ export const TraceListBody = ({
 		return <PlainLine text="Loading traces..." fg={colors.muted} />
 	}
 	if (status === "error") {
-		return <PlainLine text={error ?? "Could not load traces."} fg={colors.error} />
+		return (
+			<PlainLine text={error ?? "Could not load traces."} fg={colors.error} />
+		)
 	}
 	if (status === "ready" && services.length === 0) {
-		return <PlainLine text="No services reporting yet. Start your app and emit a span." fg={colors.muted} />
+		return (
+			<PlainLine
+				text="No services reporting yet. Start your app and emit a span."
+				fg={colors.muted}
+			/>
+		)
 	}
 	if (status === "ready" && selectedService && traces.length === 0) {
-		return <PlainLine text="No traces in the current lookback window." fg={colors.muted} />
+		return (
+			<PlainLine
+				text="No traces in the current lookback window."
+				fg={colors.muted}
+			/>
+		)
 	}
 
 	const windowStart = Math.max(0, Math.min(scrollOffset, maxOffset))

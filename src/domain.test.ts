@@ -7,11 +7,13 @@ describe("isAiSpan", () => {
 	})
 
 	test("returns false when no AI key is present", () => {
-		expect(isAiSpan({
-			"service.name": "web",
-			"http.method": "GET",
-			"db.statement": "SELECT 1",
-		})).toBe(false)
+		expect(
+			isAiSpan({
+				"service.name": "web",
+				"http.method": "GET",
+				"db.statement": "SELECT 1",
+			}),
+		).toBe(false)
 	})
 
 	test("detects Vercel AI SDK keys", () => {
@@ -32,24 +34,28 @@ describe("isAiSpan", () => {
 	})
 
 	test("detects a single AI key among many non-AI keys", () => {
-		expect(isAiSpan({
-			"service.name": "web",
-			"http.method": "POST",
-			"http.status_code": "200",
-			"ai.model.id": "ignored-not-in-fts-keys",
-			"ai.prompt": "tell me a joke",
-		})).toBe(true)
+		expect(
+			isAiSpan({
+				"service.name": "web",
+				"http.method": "POST",
+				"http.status_code": "200",
+				"ai.model.id": "ignored-not-in-fts-keys",
+				"ai.prompt": "tell me a joke",
+			}),
+		).toBe(true)
 	})
 
 	test("ignores AI-adjacent keys that are not in the FTS set", () => {
 		// `ai.model.provider`, `ai.settings.*`, `ai.telemetry.*` carry
 		// metadata, not content, so they intentionally aren't part of
 		// AI_FTS_KEYS. A span with ONLY those should not be flagged.
-		expect(isAiSpan({
-			"ai.model.provider": "openai",
-			"ai.model.id": "gpt-4",
-			"ai.settings.maxRetries": "2",
-		})).toBe(false)
+		expect(
+			isAiSpan({
+				"ai.model.provider": "openai",
+				"ai.model.id": "gpt-4",
+				"ai.settings.maxRetries": "2",
+			}),
+		).toBe(false)
 	})
 
 	test("every documented key triggers detection", () => {

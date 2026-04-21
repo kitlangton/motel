@@ -17,8 +17,14 @@ export type TraceSpanStatus = typeof TraceSpanStatus.Type
 
 export const TraceSpanEvent = Schema.Struct({
 	name: Schema.String.pipe(Schema.annotateKey({ description: "Event name" })),
-	timestamp: DateFromString.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
-	attributes: StringRecord.pipe(Schema.annotateKey({ description: "Key-value attributes attached to the event" })),
+	timestamp: DateFromString.pipe(
+		Schema.annotateKey({ description: "ISO 8601 timestamp" }),
+	),
+	attributes: StringRecord.pipe(
+		Schema.annotateKey({
+			description: "Key-value attributes attached to the event",
+		}),
+	),
 }).annotate({ identifier: "TraceSpanEvent" })
 
 export type TraceSpanEvent = typeof TraceSpanEvent.Type
@@ -27,16 +33,49 @@ export const TraceSpanItem = Schema.Struct({
 	spanId: Schema.String,
 	parentSpanId: Schema.NullOr(Schema.String),
 	serviceName: Schema.String,
-	scopeName: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Instrumentation scope (e.g. module or library name)" })),
-	kind: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Span kind: client, server, producer, consumer, or internal" })),
-	operationName: Schema.String.pipe(Schema.annotateKey({ description: "The operation this span represents (e.g. HTTP handler, DB query)" })),
-	startTime: DateFromString.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
-	isRunning: Schema.Boolean.pipe(Schema.annotateKey({ description: "True when the span has not reported an end timestamp yet" })),
-	durationMs: Schema.Number.pipe(Schema.annotateKey({ description: "Wall-clock duration in milliseconds" })),
-	status: TraceSpanStatus.pipe(Schema.annotateKey({ description: "ok or error" })),
-	depth: Schema.Number.pipe(Schema.annotateKey({ description: "Nesting depth in the span tree (root = 0)" })),
-	tags: StringRecord.pipe(Schema.annotateKey({ description: "Span attributes as key-value pairs" })),
-	warnings: Schema.Array(Schema.String).pipe(Schema.annotateKey({ description: "Structural warnings (e.g. missing parent span)" })),
+	scopeName: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "Instrumentation scope (e.g. module or library name)",
+		}),
+	),
+	kind: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "Span kind: client, server, producer, consumer, or internal",
+		}),
+	),
+	operationName: Schema.String.pipe(
+		Schema.annotateKey({
+			description:
+				"The operation this span represents (e.g. HTTP handler, DB query)",
+		}),
+	),
+	startTime: DateFromString.pipe(
+		Schema.annotateKey({ description: "ISO 8601 timestamp" }),
+	),
+	isRunning: Schema.Boolean.pipe(
+		Schema.annotateKey({
+			description: "True when the span has not reported an end timestamp yet",
+		}),
+	),
+	durationMs: Schema.Number.pipe(
+		Schema.annotateKey({ description: "Wall-clock duration in milliseconds" }),
+	),
+	status: TraceSpanStatus.pipe(
+		Schema.annotateKey({ description: "ok or error" }),
+	),
+	depth: Schema.Number.pipe(
+		Schema.annotateKey({
+			description: "Nesting depth in the span tree (root = 0)",
+		}),
+	),
+	tags: StringRecord.pipe(
+		Schema.annotateKey({ description: "Span attributes as key-value pairs" }),
+	),
+	warnings: Schema.Array(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "Structural warnings (e.g. missing parent span)",
+		}),
+	),
 	events: Schema.Array(TraceSpanEvent),
 }).annotate({ identifier: "TraceSpan" })
 
@@ -44,15 +83,37 @@ export type TraceSpanItem = typeof TraceSpanItem.Type
 
 export const TraceItem = Schema.Struct({
 	traceId: Schema.String,
-	serviceName: Schema.String.pipe(Schema.annotateKey({ description: "Service that owns the root span" })),
-	rootOperationName: Schema.String.pipe(Schema.annotateKey({ description: "Operation name of the root span" })),
-	startedAt: DateFromString.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp of the earliest span" })),
-	isRunning: Schema.Boolean.pipe(Schema.annotateKey({ description: "True when any span in the trace is still open" })),
-	durationMs: Schema.Number.pipe(Schema.annotateKey({ description: "End-to-end trace duration in milliseconds" })),
+	serviceName: Schema.String.pipe(
+		Schema.annotateKey({ description: "Service that owns the root span" }),
+	),
+	rootOperationName: Schema.String.pipe(
+		Schema.annotateKey({ description: "Operation name of the root span" }),
+	),
+	startedAt: DateFromString.pipe(
+		Schema.annotateKey({
+			description: "ISO 8601 timestamp of the earliest span",
+		}),
+	),
+	isRunning: Schema.Boolean.pipe(
+		Schema.annotateKey({
+			description: "True when any span in the trace is still open",
+		}),
+	),
+	durationMs: Schema.Number.pipe(
+		Schema.annotateKey({
+			description: "End-to-end trace duration in milliseconds",
+		}),
+	),
 	spanCount: Schema.Number,
-	errorCount: Schema.Number.pipe(Schema.annotateKey({ description: "Number of spans with status=error" })),
+	errorCount: Schema.Number.pipe(
+		Schema.annotateKey({ description: "Number of spans with status=error" }),
+	),
 	warnings: Schema.Array(Schema.String),
-	spans: Schema.Array(TraceSpanItem).pipe(Schema.annotateKey({ description: "Spans ordered by parent-child hierarchy, depth-first" })),
+	spans: Schema.Array(TraceSpanItem).pipe(
+		Schema.annotateKey({
+			description: "Spans ordered by parent-child hierarchy, depth-first",
+		}),
+	),
 }).annotate({ identifier: "Trace" })
 
 export type TraceItem = typeof TraceItem.Type
@@ -61,7 +122,9 @@ export const TraceSummaryItem = Schema.Struct({
 	traceId: Schema.String,
 	serviceName: Schema.String,
 	rootOperationName: Schema.String,
-	startedAt: DateFromString.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
+	startedAt: DateFromString.pipe(
+		Schema.annotateKey({ description: "ISO 8601 timestamp" }),
+	),
 	isRunning: Schema.Boolean,
 	durationMs: Schema.Number,
 	spanCount: Schema.Number,
@@ -73,8 +136,16 @@ export type TraceSummaryItem = typeof TraceSummaryItem.Type
 
 export const SpanItem = Schema.Struct({
 	traceId: Schema.String,
-	rootOperationName: Schema.String.pipe(Schema.annotateKey({ description: "Operation name of the trace's root span, for context" })),
-	parentOperationName: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Parent span operation name, if present" })),
+	rootOperationName: Schema.String.pipe(
+		Schema.annotateKey({
+			description: "Operation name of the trace's root span, for context",
+		}),
+	),
+	parentOperationName: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "Parent span operation name, if present",
+		}),
+	),
 	span: TraceSpanItem,
 }).annotate({ identifier: "SpanWithContext" })
 
@@ -82,14 +153,34 @@ export type SpanItem = typeof SpanItem.Type
 
 export const LogItem = Schema.Struct({
 	id: Schema.String,
-	timestamp: DateFromString.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
+	timestamp: DateFromString.pipe(
+		Schema.annotateKey({ description: "ISO 8601 timestamp" }),
+	),
 	serviceName: Schema.String,
-	severityText: Schema.String.pipe(Schema.annotateKey({ description: "Log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL" })),
-	body: Schema.String.pipe(Schema.annotateKey({ description: "Log message body" })),
-	traceId: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Associated trace ID, if the log was emitted inside a span" })),
-	spanId: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Associated span ID, if the log was emitted inside a span" })),
+	severityText: Schema.String.pipe(
+		Schema.annotateKey({
+			description: "Log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL",
+		}),
+	),
+	body: Schema.String.pipe(
+		Schema.annotateKey({ description: "Log message body" }),
+	),
+	traceId: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "Associated trace ID, if the log was emitted inside a span",
+		}),
+	),
+	spanId: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "Associated span ID, if the log was emitted inside a span",
+		}),
+	),
 	scopeName: Schema.NullOr(Schema.String),
-	attributes: StringRecord.pipe(Schema.annotateKey({ description: "Merged resource + log attributes as key-value pairs" })),
+	attributes: StringRecord.pipe(
+		Schema.annotateKey({
+			description: "Merged resource + log attributes as key-value pairs",
+		}),
+	),
 }).annotate({ identifier: "Log" })
 
 export type LogItem = typeof LogItem.Type
@@ -99,16 +190,28 @@ export type LogItem = typeof LogItem.Type
 // ---------------------------------------------------------------------------
 
 export const FacetItem = Schema.Struct({
-	value: Schema.String.pipe(Schema.annotateKey({ description: "Distinct value for the faceted field" })),
-	count: Schema.Number.pipe(Schema.annotateKey({ description: "Number of occurrences" })),
+	value: Schema.String.pipe(
+		Schema.annotateKey({ description: "Distinct value for the faceted field" }),
+	),
+	count: Schema.Number.pipe(
+		Schema.annotateKey({ description: "Number of occurrences" }),
+	),
 }).annotate({ identifier: "Facet" })
 
 export type FacetItem = typeof FacetItem.Type
 
 export const StatsItem = Schema.Struct({
-	group: Schema.String.pipe(Schema.annotateKey({ description: "Grouping key" })),
-	value: Schema.Number.pipe(Schema.annotateKey({ description: "Aggregate value for the chosen metric" })),
-	count: Schema.Number.pipe(Schema.annotateKey({ description: "Number of samples in the group" })),
+	group: Schema.String.pipe(
+		Schema.annotateKey({ description: "Grouping key" }),
+	),
+	value: Schema.Number.pipe(
+		Schema.annotateKey({
+			description: "Aggregate value for the chosen metric",
+		}),
+	),
+	count: Schema.Number.pipe(
+		Schema.annotateKey({ description: "Number of samples in the group" }),
+	),
 }).annotate({ identifier: "Stat" })
 
 export type StatsItem = typeof StatsItem.Type
@@ -213,7 +316,9 @@ export const isAiSpan = (tags: Readonly<Record<string, string>>): boolean => {
 
 const PREVIEW_LENGTH = 200
 
-export const truncatePreview = (value: string | null | undefined): string | null => {
+export const truncatePreview = (
+	value: string | null | undefined,
+): string | null => {
 	if (!value) return null
 	if (value.length <= PREVIEW_LENGTH) return value
 	return value.slice(0, PREVIEW_LENGTH) + "..."
@@ -232,20 +337,40 @@ export type AiUsage = typeof AiUsage.Type
 export const AiCallSummary = Schema.Struct({
 	traceId: Schema.String,
 	spanId: Schema.String,
-	operation: Schema.String.pipe(Schema.annotateKey({ description: "AI operation: streamText, generateText, streamObject, etc." })),
+	operation: Schema.String.pipe(
+		Schema.annotateKey({
+			description: "AI operation: streamText, generateText, streamObject, etc.",
+		}),
+	),
 	service: Schema.String,
-	functionId: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "ai.telemetry.functionId" })),
-	provider: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "ai.model.provider (e.g. openai.responses)" })),
-	model: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "ai.model.id (e.g. gpt-5.4)" })),
+	functionId: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({ description: "ai.telemetry.functionId" }),
+	),
+	provider: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({
+			description: "ai.model.provider (e.g. openai.responses)",
+		}),
+	),
+	model: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({ description: "ai.model.id (e.g. gpt-5.4)" }),
+	),
 	status: TraceSpanStatus,
-	startedAt: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
+	startedAt: Schema.String.pipe(
+		Schema.annotateKey({ description: "ISO 8601 timestamp" }),
+	),
 	durationMs: Schema.Number,
 	sessionId: Schema.NullOr(Schema.String),
 	userId: Schema.NullOr(Schema.String),
-	promptPreview: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "First ~200 chars of prompt content" })),
-	responsePreview: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "First ~200 chars of response text" })),
+	promptPreview: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({ description: "First ~200 chars of prompt content" }),
+	),
+	responsePreview: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({ description: "First ~200 chars of response text" }),
+	),
 	finishReason: Schema.NullOr(Schema.String),
-	toolCallCount: Schema.Number.pipe(Schema.annotateKey({ description: "Number of tool call child spans" })),
+	toolCallCount: Schema.Number.pipe(
+		Schema.annotateKey({ description: "Number of tool call child spans" }),
+	),
 	usage: Schema.NullOr(AiUsage),
 }).annotate({ identifier: "AiCallSummary" })
 
@@ -274,10 +399,18 @@ export const AiCallDetail = Schema.Struct({
 	sessionId: Schema.NullOr(Schema.String),
 	userId: Schema.NullOr(Schema.String),
 	finishReason: Schema.NullOr(Schema.String),
-	promptMessages: Schema.NullOr(Schema.Unknown).pipe(Schema.annotateKey({ description: "Full parsed ai.prompt.messages or ai.prompt" })),
-	responseText: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Full ai.response.text" })),
+	promptMessages: Schema.NullOr(Schema.Unknown).pipe(
+		Schema.annotateKey({
+			description: "Full parsed ai.prompt.messages or ai.prompt",
+		}),
+	),
+	responseText: Schema.NullOr(Schema.String).pipe(
+		Schema.annotateKey({ description: "Full ai.response.text" }),
+	),
 	toolCalls: Schema.Array(AiToolCall),
-	toolsAvailable: Schema.NullOr(Schema.Unknown).pipe(Schema.annotateKey({ description: "Full ai.prompt.tools" })),
+	toolsAvailable: Schema.NullOr(Schema.Unknown).pipe(
+		Schema.annotateKey({ description: "Full ai.prompt.tools" }),
+	),
 	providerMetadata: Schema.NullOr(Schema.Unknown),
 	usage: Schema.NullOr(AiUsage),
 	timing: Schema.Struct({
@@ -285,7 +418,9 @@ export const AiCallDetail = Schema.Struct({
 		msToFinish: Schema.NullOr(Schema.Number),
 		avgOutputTokensPerSecond: Schema.NullOr(Schema.Number),
 	}),
-	logs: Schema.Array(Schema.Unknown).pipe(Schema.annotateKey({ description: "Correlated log records" })),
+	logs: Schema.Array(Schema.Unknown).pipe(
+		Schema.annotateKey({ description: "Correlated log records" }),
+	),
 }).annotate({ identifier: "AiCallDetail" })
 
 export type AiCallDetail = typeof AiCallDetail.Type

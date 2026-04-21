@@ -19,7 +19,12 @@ const ms = (n: number) => String(base + BigInt(n) * 1_000_000n)
 // Enough traces that the list scrolls in a typical 40-row terminal, and
 // enough duration spread that `slowest` order is meaningfully different
 // from `recent`.
-const specs: ReadonlyArray<{ id: string; op: string; startMsAgo: number; durMs: number }> = [
+const specs: ReadonlyArray<{
+	id: string
+	op: string
+	startMsAgo: number
+	durMs: number
+}> = [
 	{ id: "a", op: "opA", startMsAgo: 1500, durMs: 10 },
 	{ id: "b", op: "opB", startMsAgo: 1400, durMs: 50 },
 	{ id: "c", op: "opC", startMsAgo: 1300, durMs: 5 },
@@ -38,7 +43,9 @@ const specs: ReadonlyArray<{ id: string; op: string; startMsAgo: number; durMs: 
 ]
 
 const resourceSpans = specs.map((spec) => ({
-	resource: { attributes: [{ key: "service.name", value: { stringValue: SERVICE_NAME } }] },
+	resource: {
+		attributes: [{ key: "service.name", value: { stringValue: SERVICE_NAME } }],
+	},
 	scopeSpans: [
 		{
 			scope: { name: "s" },
@@ -57,6 +64,8 @@ const resourceSpans = specs.map((spec) => ({
 }))
 
 await storeRuntime.runPromise(
-	Effect.flatMap(TelemetryStore.asEffect(), (store) => store.ingestTraces({ resourceSpans })),
+	Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+		store.ingestTraces({ resourceSpans }),
+	),
 )
 process.exit(0)

@@ -93,10 +93,14 @@ interface KeyboardNavParams {
 	flashNotice: (message: string) => void
 }
 
-const findTraceIndexById = (traces: readonly TraceSummaryItem[], traceId: string | null) =>
+const findTraceIndexById = (
+	traces: readonly TraceSummaryItem[],
+	traceId: string | null,
+) =>
 	traceId === null ? -1 : traces.findIndex((trace) => trace.traceId === traceId)
 
-const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
+const clamp = (n: number, min: number, max: number) =>
+	Math.max(min, Math.min(max, n))
 
 export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const {
@@ -112,11 +116,19 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const [traceState] = useAtom(traceStateAtom)
 	const [serviceLogState] = useAtom(serviceLogStateAtom)
-	const [selectedSpanIndex, setSelectedSpanIndex] = useAtom(selectedSpanIndexAtom)
-	const [selectedServiceLogIndex, setSelectedServiceLogIndex] = useAtom(selectedServiceLogIndexAtom)
+	const [selectedSpanIndex, setSelectedSpanIndex] = useAtom(
+		selectedSpanIndexAtom,
+	)
+	const [selectedServiceLogIndex, setSelectedServiceLogIndex] = useAtom(
+		selectedServiceLogIndexAtom,
+	)
 	const [selectedTheme, setSelectedTheme] = useAtom(selectedThemeAtom)
-	const [selectedTraceIndex, setSelectedTraceIndex] = useAtom(selectedTraceIndexAtom)
-	const [selectedTraceService, setSelectedTraceService] = useAtom(selectedTraceServiceAtom)
+	const [selectedTraceIndex, setSelectedTraceIndex] = useAtom(
+		selectedTraceIndexAtom,
+	)
+	const [selectedTraceService, setSelectedTraceService] = useAtom(
+		selectedTraceServiceAtom,
+	)
 	const [detailView, setDetailView] = useAtom(detailViewAtom)
 	const [showHelp, setShowHelp] = useAtom(showHelpAtom)
 	const [, setRefreshNonce] = useAtom(refreshNonceAtom)
@@ -131,32 +143,52 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [attrFacets, setAttrFacets] = useAtom(attrFacetStateAtom)
 	const [activeAttrKey, setActiveAttrKey] = useAtom(activeAttrKeyAtom)
 	const [activeAttrValue, setActiveAttrValue] = useAtom(activeAttrValueAtom)
-	const [waterfallFilterMode, setWaterfallFilterMode] = useAtom(waterfallFilterModeAtom)
-	const [waterfallFilterText, setWaterfallFilterText] = useAtom(waterfallFilterTextAtom)
-	const [selectedAttrIndex, setSelectedAttrIndex] = useAtom(selectedAttrIndexAtom)
-	const [chatDetailChunkId, setChatDetailChunkId] = useAtom(chatDetailChunkIdAtom)
-	const [chatDetailScrollOffset, setChatDetailScrollOffset] = useAtom(chatDetailScrollOffsetAtom)
-	const [selectedChatChunkId, setSelectedChatChunkId] = useAtom(selectedChatChunkIdAtom)
+	const [waterfallFilterMode, setWaterfallFilterMode] = useAtom(
+		waterfallFilterModeAtom,
+	)
+	const [waterfallFilterText, setWaterfallFilterText] = useAtom(
+		waterfallFilterTextAtom,
+	)
+	const [selectedAttrIndex, setSelectedAttrIndex] = useAtom(
+		selectedAttrIndexAtom,
+	)
+	const [chatDetailChunkId, setChatDetailChunkId] = useAtom(
+		chatDetailChunkIdAtom,
+	)
+	const [chatDetailScrollOffset, setChatDetailScrollOffset] = useAtom(
+		chatDetailScrollOffsetAtom,
+	)
+	const [selectedChatChunkId, setSelectedChatChunkId] = useAtom(
+		selectedChatChunkIdAtom,
+	)
 
 	const pendingGRef = useRef(false)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const quittingRef = useRef(false)
 
-	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
+	const spanNavActive =
+		detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
 	// L2 (full-screen content view): j/k/y/gg/G operate on the tag list
 	// instead of the waterfall or trace list. Enter drilled us here from
 	// L1; esc drills back.
-	const attrNavActive = detailView === "span-detail" && selectedSpanIndex !== null
+	const attrNavActive =
+		detailView === "span-detail" && selectedSpanIndex !== null
 	// L2 specialisation: when drilled into an AI-flagged span we render
 	// the chat transcript view instead of the attribute dump. j/k scroll
 	// the transcript by a line, ctrl-d/u page by half the viewport, y
 	// falls back to copying trace/span ids (the individual message
 	// copying can come later; line-level is rarely what you want).
-	const selectedSpanForAi = selectedTrace && selectedSpanIndex !== null
-		? getVisibleSpans(selectedTrace.spans, collapsedSpanIds)[selectedSpanIndex] ?? null
-		: null
-	const chatNavActive = attrNavActive && selectedSpanForAi !== null && isAiSpan(selectedSpanForAi.tags)
+	const selectedSpanForAi =
+		selectedTrace && selectedSpanIndex !== null
+			? (getVisibleSpans(selectedTrace.spans, collapsedSpanIds)[
+					selectedSpanIndex
+				] ?? null)
+			: null
+	const chatNavActive =
+		attrNavActive &&
+		selectedSpanForAi !== null &&
+		isAiSpan(selectedSpanForAi.tags)
 
 	// Bracketed paste: when the terminal has bracketed paste enabled, opentui
 	// surfaces the full pasted text as a single "paste" event on keyInput.
@@ -164,7 +196,14 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	// mode ourselves (`\x1b[?2004h`) in case the host terminal didn't — it's
 	// a no-op on terminals that already had it on.
 	useEffect(() => {
-		const keyInput = (renderer as unknown as { keyInput?: { on: (event: string, handler: (e: unknown) => void) => void; off: (event: string, handler: (e: unknown) => void) => void } }).keyInput
+		const keyInput = (
+			renderer as unknown as {
+				keyInput?: {
+					on: (event: string, handler: (e: unknown) => void) => void
+					off: (event: string, handler: (e: unknown) => void) => void
+				}
+			}
+		).keyInput
 		if (!keyInput) return
 		try {
 			process.stdout.write("\x1b[?2004h")
@@ -174,7 +213,9 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const handler = (event: unknown) => {
 			const bytes = (event as { bytes?: Uint8Array }).bytes
 			if (!bytes || bytes.length === 0) return
-			const text = Buffer.from(bytes).toString("utf8").replace(/[\x00-\x1f\x7f]+/g, (match) => match === "\n" ? " " : "")
+			const text = Buffer.from(bytes)
+				.toString("utf8")
+				.replace(/[\x00-\x1f\x7f]+/g, (match) => (match === "\n" ? " " : ""))
 			if (!text) return
 			const s = stateRef.current
 			if (s.pickerMode !== "off") {
@@ -269,10 +310,18 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		}
 		const cached = getCachedFacetKeys(service)
 		if (!cached) return
-		setAttrFacets({ status: "ready", key: null, data: cached.data, error: null })
+		setAttrFacets({
+			status: "ready",
+			key: null,
+			data: cached.data,
+			error: null,
+		})
 	}
 
-	const hydrateCachedPickerValues = (service: string | null, key: string | null) => {
+	const hydrateCachedPickerValues = (
+		service: string | null,
+		key: string | null,
+	) => {
 		if (!service || !key) {
 			setAttrFacets(initialAttrFacetState)
 			return
@@ -289,7 +338,9 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const getVisibleSelectedSpans = () => {
 		const s = $()
-		return s.selectedTrace ? getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds) : []
+		return s.selectedTrace
+			? getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds)
+			: []
 	}
 
 	const getSelectedVisibleSpan = () => {
@@ -308,7 +359,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const currentFilteredTraceIndex = () => {
 		const s = $()
-		const selectedTraceId = s.traceState.data[s.selectedTraceIndex]?.traceId ?? null
+		const selectedTraceId =
+			s.traceState.data[s.selectedTraceIndex]?.traceId ?? null
 		return findTraceIndexById(s.filteredTraces, selectedTraceId)
 	}
 
@@ -321,9 +373,13 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const s = $()
 		if (s.filteredTraces.length === 0) return
 		const currentIndex = currentFilteredTraceIndex()
-		const nextIndex = currentIndex < 0
-			? 0
-			: Math.max(0, Math.min(currentIndex + delta, s.filteredTraces.length - 1))
+		const nextIndex =
+			currentIndex < 0
+				? 0
+				: Math.max(
+						0,
+						Math.min(currentIndex + delta, s.filteredTraces.length - 1),
+					)
 		selectFilteredTraceAt(nextIndex)
 	}
 
@@ -333,7 +389,15 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			setSelectedServiceLogIndex(0)
 			return
 		}
-		setSelectedServiceLogIndex(Math.max(0, Math.min(s.selectedServiceLogIndex + delta, s.serviceLogState.data.length - 1)))
+		setSelectedServiceLogIndex(
+			Math.max(
+				0,
+				Math.min(
+					s.selectedServiceLogIndex + delta,
+					s.serviceLogState.data.length - 1,
+				),
+			),
+		)
 	}
 
 	const moveSpanBy = (delta: number) => {
@@ -345,14 +409,18 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			return
 		}
 		const current = s.selectedSpanIndex ?? 0
-		setSelectedSpanIndex(Math.max(0, Math.min(current + delta, visibleCount - 1)))
+		setSelectedSpanIndex(
+			Math.max(0, Math.min(current + delta, visibleCount - 1)),
+		)
 	}
 
 	const moveAttrBy = (delta: number) => {
 		const count = attrCountForSelectedSpan()
 		if (count === 0) return
 		const s = $()
-		setSelectedAttrIndex(Math.max(0, Math.min(s.selectedAttrIndex + delta, count - 1)))
+		setSelectedAttrIndex(
+			Math.max(0, Math.min(s.selectedAttrIndex + delta, count - 1)),
+		)
 	}
 
 	const moveChatChunkBy = (direction: -1 | 1) => {
@@ -363,7 +431,10 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const currentIdx = s.selectedChatChunkId
 			? chunks.findIndex((c) => c.id === s.selectedChatChunkId)
 			: 0
-		const nextIdx = Math.max(0, Math.min(currentIdx + direction, chunks.length - 1))
+		const nextIdx = Math.max(
+			0,
+			Math.min(currentIdx + direction, chunks.length - 1),
+		)
 		const next = chunks[nextIdx]
 		if (next) setSelectedChatChunkId(next.id)
 	}
@@ -395,10 +466,17 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const s = $()
 		if (s.chatNavActive) {
 			if (s.chatDetailChunkId) {
-				const openChunk = s.aiChatChunks.find((c) => c.id === s.chatDetailChunkId)
+				const openChunk = s.aiChatChunks.find(
+					(c) => c.id === s.chatDetailChunkId,
+				)
 				if (!openChunk) return
 				const lines = renderChunkDetailLines(openChunk, 80)
-				const pageSize = Math.max(4, Math.floor((s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) * 0.75))
+				const pageSize = Math.max(
+					4,
+					Math.floor(
+						(s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) * 0.75,
+					),
+				)
 				setChatDetailScrollOffset(Math.max(0, lines.length - pageSize))
 				return
 			}
@@ -422,9 +500,17 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const cycleService = (direction: -1 | 1) => {
 		const s = $()
 		if (s.traceState.services.length === 0) return
-		const currentIndex = s.selectedTraceService ? s.traceState.services.indexOf(s.selectedTraceService) : -1
-		const nextIndex = currentIndex >= 0 ? (currentIndex + direction + s.traceState.services.length) % s.traceState.services.length : 0
-		setSelectedTraceService(s.traceState.services[nextIndex] ?? s.selectedTraceService)
+		const currentIndex = s.selectedTraceService
+			? s.traceState.services.indexOf(s.selectedTraceService)
+			: -1
+		const nextIndex =
+			currentIndex >= 0
+				? (currentIndex + direction + s.traceState.services.length) %
+					s.traceState.services.length
+				: 0
+		setSelectedTraceService(
+			s.traceState.services[nextIndex] ?? s.selectedTraceService,
+		)
 	}
 
 	const refresh = (message?: string) => {
@@ -446,7 +532,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const [key, value] = entry
 		void copyToClipboard(value)
 			.then(() => {
-				const preview = value.length > 40 ? `${value.slice(0, 39)}\u2026` : value
+				const preview =
+					value.length > 40 ? `${value.slice(0, 39)}\u2026` : value
 				s.flashNotice(`Copied ${key}: ${preview}`)
 			})
 			.catch((error) => {
@@ -484,10 +571,16 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			const lines = [
 				`traceId=${selectedLog.traceId}`,
 				selectedLog.spanId ? `spanId=${selectedLog.spanId}` : null,
-			].filter((line): line is string => line !== null).join("\n")
+			]
+				.filter((line): line is string => line !== null)
+				.join("\n")
 			void copyToClipboard(lines)
 				.then(() => {
-					s.flashNotice(selectedLog.spanId ? "Copied trace and span ids" : "Copied trace id")
+					s.flashNotice(
+						selectedLog.spanId
+							? "Copied trace and span ids"
+							: "Copied trace id",
+					)
 				})
 				.catch((error) => {
 					s.flashNotice(error instanceof Error ? error.message : String(error))
@@ -504,11 +597,15 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		const lines = [
 			`traceId=${s.selectedTrace.traceId}`,
 			selectedSpan ? `spanId=${selectedSpan.spanId}` : null,
-		].filter((line): line is string => line !== null).join("\n")
+		]
+			.filter((line): line is string => line !== null)
+			.join("\n")
 
 		void copyToClipboard(lines)
 			.then(() => {
-				s.flashNotice(selectedSpan ? "Copied trace and span ids" : "Copied trace id")
+				s.flashNotice(
+					selectedSpan ? "Copied trace and span ids" : "Copied trace id",
+				)
 			})
 			.catch((error) => {
 				s.flashNotice(error instanceof Error ? error.message : String(error))
@@ -518,19 +615,34 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const toggleServiceLogsView = () => {
 		const s = $()
 		if (!s.selectedTraceService && !s.selectedTrace) return
-		setDetailView((current) => current === "service-logs" ? (s.selectedSpanIndex !== null ? "span-detail" : "waterfall") : "service-logs")
+		setDetailView((current) =>
+			current === "service-logs"
+				? s.selectedSpanIndex !== null
+					? "span-detail"
+					: "waterfall"
+				: "service-logs",
+		)
 	}
 
 	const pageBy = (direction: -1 | 1) => {
 		const s = $()
 		if (s.chatNavActive) {
 			if (s.chatDetailChunkId) {
-				const openChunk = s.aiChatChunks.find((c) => c.id === s.chatDetailChunkId)
+				const openChunk = s.aiChatChunks.find(
+					(c) => c.id === s.chatDetailChunkId,
+				)
 				if (!openChunk) return
-				const pageSize = Math.max(1, Math.floor((s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) / 2))
+				const pageSize = Math.max(
+					1,
+					Math.floor(
+						(s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) / 2,
+					),
+				)
 				const detailLines = renderChunkDetailLines(openChunk, 80)
 				const maxOffset = Math.max(0, detailLines.length - pageSize)
-				setChatDetailScrollOffset((current) => clamp(current + direction * pageSize, 0, maxOffset))
+				setChatDetailScrollOffset((current) =>
+					clamp(current + direction * pageSize, 0, maxOffset),
+				)
 				return
 			}
 			// Page-by-half in chunk units.
@@ -539,7 +651,10 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			const currentIdx = s.selectedChatChunkId
 				? chunks.findIndex((c) => c.id === s.selectedChatChunkId)
 				: 0
-			const nextIdx = Math.max(0, Math.min(currentIdx + direction * pageSize, chunks.length - 1))
+			const nextIdx = Math.max(
+				0,
+				Math.min(currentIdx + direction * pageSize, chunks.length - 1),
+			)
 			const next = chunks[nextIdx]
 			if (next) setSelectedChatChunkId(next.id)
 			return
@@ -550,14 +665,22 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			// Attr page size: ~half the viewport in "blocks", not rows.
 			// Attributes are variable height so measuring in blocks keeps
 			// the jump feeling consistent regardless of value length.
-			const pageSize = Math.max(1, Math.floor((s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) / 4))
+			const pageSize = Math.max(
+				1,
+				Math.floor((s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) / 4),
+			)
 			setSelectedAttrIndex((current) =>
 				Math.max(0, Math.min(current + direction * pageSize, count - 1)),
 			)
 			return
 		}
 		if (s.serviceLogNavActive) {
-			const serviceLogPageSize = Math.max(1, Math.floor((s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) * 0.5))
+			const serviceLogPageSize = Math.max(
+				1,
+				Math.floor(
+					(s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) * 0.5,
+				),
+			)
 			moveServiceLogBy(direction * serviceLogPageSize)
 		} else if (s.spanNavActive) {
 			moveSpanBy(direction * s.spanPageSize)
@@ -571,10 +694,15 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		if (s.pickerMode === "off") return false
 
 		const rows = filterFacets(s.attrFacets.data, s.pickerInput)
-		const clampedIndex = rows.length === 0 ? 0 : Math.max(0, Math.min(s.pickerIndex, rows.length - 1))
+		const clampedIndex =
+			rows.length === 0
+				? 0
+				: Math.max(0, Math.min(s.pickerIndex, rows.length - 1))
 		const move = (delta: number) => {
 			if (rows.length === 0) return
-			setPickerIndex(Math.max(0, Math.min(clampedIndex + delta, rows.length - 1)))
+			setPickerIndex(
+				Math.max(0, Math.min(clampedIndex + delta, rows.length - 1)),
+			)
 		}
 
 		if (key.name === "escape") {
@@ -711,12 +839,14 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const handleHelpModalKey = (key: KeyboardKey) => {
 		if (!$().showHelp) return false
-		if (key.name === "return" || key.name === "enter" || key.name === "escape") setShowHelp(false)
+		if (key.name === "return" || key.name === "enter" || key.name === "escape")
+			setShowHelp(false)
 		return true
 	}
 
 	const handleJumpKeys = (key: KeyboardKey) => {
-		const plainG = key.name === "g" && !key.ctrl && !key.meta && !key.option && !key.shift
+		const plainG =
+			key.name === "g" && !key.ctrl && !key.meta && !key.option && !key.shift
 		const shiftedG = key.name === "g" && key.shift
 		if (plainG && !key.repeated) {
 			if (pendingGRef.current) {
@@ -749,7 +879,12 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			return true
 		}
 		if (key.name === "end") {
-			if (s.serviceLogNavActive) setSelectedServiceLogIndex(s.serviceLogState.data.length === 0 ? 0 : s.serviceLogState.data.length - 1)
+			if (s.serviceLogNavActive)
+				setSelectedServiceLogIndex(
+					s.serviceLogState.data.length === 0
+						? 0
+						: s.serviceLogState.data.length - 1,
+				)
 			else jumpToEnd()
 			return true
 		}
@@ -815,7 +950,10 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		if (s.detailView === "service-logs") {
 			const selectedLog = s.serviceLogState.data[s.selectedServiceLogIndex]
 			if (selectedLog?.traceId) {
-				const traceIndex = findTraceIndexById(s.traceState.data, selectedLog.traceId)
+				const traceIndex = findTraceIndexById(
+					s.traceState.data,
+					selectedLog.traceId,
+				)
 				if (traceIndex >= 0) {
 					setSelectedTraceIndex(traceIndex)
 					setDetailView("waterfall")
@@ -828,7 +966,11 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			setDetailView("span-detail")
 			return true
 		}
-		if (!s.spanNavActive && s.selectedTrace && s.selectedTrace.spans.length > 0) {
+		if (
+			!s.spanNavActive &&
+			s.selectedTrace &&
+			s.selectedTrace.spans.length > 0
+		) {
 			setSelectedSpanIndex(0)
 			return true
 		}
@@ -843,12 +985,15 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		}
 		if (key.name === "a") {
 			setAutoRefresh(!s.autoRefresh)
-			s.flashNotice(s.autoRefresh ? "Auto-refresh paused" : "Auto-refresh resumed")
+			s.flashNotice(
+				s.autoRefresh ? "Auto-refresh paused" : "Auto-refresh resumed",
+			)
 			return true
 		}
 		if (key.name === "s") {
 			const modes: readonly TraceSortMode[] = ["recent", "slowest", "errors"]
-			const nextMode = modes[(modes.indexOf(s.traceSort) + 1) % modes.length] ?? "recent"
+			const nextMode =
+				modes[(modes.indexOf(s.traceSort) + 1) % modes.length] ?? "recent"
 			setTraceSort(nextMode)
 			s.flashNotice(`Sort: ${nextMode}`)
 			return true
@@ -860,13 +1005,22 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			return true
 		}
 		if ((key.name === "n" || key.name === "N") && !key.ctrl && !key.meta) {
-			const inWaterfall = s.detailView === "span-detail" || s.selectedSpanIndex !== null
+			const inWaterfall =
+				s.detailView === "span-detail" || s.selectedSpanIndex !== null
 			if (inWaterfall && s.waterfallFilterText.length > 0 && s.selectedTrace) {
 				const visibleSpans = getVisibleSelectedSpans()
-				const matchingIds = computeMatchingSpanIds(visibleSpans, s.waterfallFilterText)
+				const matchingIds = computeMatchingSpanIds(
+					visibleSpans,
+					s.waterfallFilterText,
+				)
 				if (matchingIds && matchingIds.size > 0) {
 					const direction = key.name === "N" ? -1 : 1
-					const next = findAdjacentMatch(visibleSpans, matchingIds, s.selectedSpanIndex, direction)
+					const next = findAdjacentMatch(
+						visibleSpans,
+						matchingIds,
+						s.selectedSpanIndex,
+						direction,
+					)
 					if (next !== null) setSelectedSpanIndex(next)
 					else s.flashNotice("No matches")
 				} else {
@@ -876,7 +1030,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			}
 		}
 		if (key.name === "/" && !key.shift) {
-			const inWaterfall = s.detailView === "span-detail" || s.selectedSpanIndex !== null
+			const inWaterfall =
+				s.detailView === "span-detail" || s.selectedSpanIndex !== null
 			if (inWaterfall) setWaterfallFilterMode(true)
 			else setFilterMode(true)
 			return true
@@ -910,9 +1065,18 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				moveChatChunkBy(-1)
 				return true
 			}
-			if (s.attrNavActive) { moveAttrBy(-1); return true }
-			if (s.serviceLogNavActive) { moveServiceLogBy(-1); return true }
-			if (s.spanNavActive) { moveSpanBy(-1); return true }
+			if (s.attrNavActive) {
+				moveAttrBy(-1)
+				return true
+			}
+			if (s.serviceLogNavActive) {
+				moveServiceLogBy(-1)
+				return true
+			}
+			if (s.spanNavActive) {
+				moveSpanBy(-1)
+				return true
+			}
 			moveTraceBy(-1)
 			return true
 		}
@@ -921,9 +1085,18 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				moveChatChunkBy(1)
 				return true
 			}
-			if (s.attrNavActive) { moveAttrBy(1); return true }
-			if (s.serviceLogNavActive) { moveServiceLogBy(1); return true }
-			if (s.spanNavActive) { moveSpanBy(1); return true }
+			if (s.attrNavActive) {
+				moveAttrBy(1)
+				return true
+			}
+			if (s.serviceLogNavActive) {
+				moveServiceLogBy(1)
+				return true
+			}
+			if (s.spanNavActive) {
+				moveSpanBy(1)
+				return true
+			}
 			moveTraceBy(1)
 			return true
 		}
@@ -937,7 +1110,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 						selectedIndex: s.selectedSpanIndex,
 						direction: "left",
 					})
-					if (result.selectedIndex !== s.selectedSpanIndex) setSelectedSpanIndex(result.selectedIndex)
+					if (result.selectedIndex !== s.selectedSpanIndex)
+						setSelectedSpanIndex(result.selectedIndex)
 					return result.collapsed
 				})
 			}
@@ -953,7 +1127,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 						selectedIndex: s.selectedSpanIndex,
 						direction: "right",
 					})
-					if (result.selectedIndex !== s.selectedSpanIndex) setSelectedSpanIndex(result.selectedIndex)
+					if (result.selectedIndex !== s.selectedSpanIndex)
+						setSelectedSpanIndex(result.selectedIndex)
 					return result.collapsed
 				})
 			} else if (!s.spanNavActive && !s.serviceLogNavActive) {
@@ -970,18 +1145,30 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			if (s.serviceLogNavActive) {
 				const selectedLog = s.serviceLogState.data[s.selectedServiceLogIndex]
 				if (selectedLog?.traceId) {
-					void Bun.spawn({ cmd: ["open", traceUiUrl(selectedLog.traceId)], stdout: "ignore", stderr: "ignore" })
+					void Bun.spawn({
+						cmd: ["open", traceUiUrl(selectedLog.traceId)],
+						stdout: "ignore",
+						stderr: "ignore",
+					})
 					s.flashNotice(`Opened trace ${selectedLog.traceId.slice(-8)}`)
 				}
 				return true
 			}
 			if (!s.selectedTrace) return true
-			void Bun.spawn({ cmd: ["open", traceUiUrl(s.selectedTrace.traceId)], stdout: "ignore", stderr: "ignore" })
+			void Bun.spawn({
+				cmd: ["open", traceUiUrl(s.selectedTrace.traceId)],
+				stdout: "ignore",
+				stderr: "ignore",
+			})
 			s.flashNotice(`Opened trace ${s.selectedTrace.traceId.slice(-8)}`)
 			return true
 		}
 		if (key.name === "o" && key.shift) {
-			void Bun.spawn({ cmd: ["open", webUiUrl()], stdout: "ignore", stderr: "ignore" })
+			void Bun.spawn({
+				cmd: ["open", webUiUrl()],
+				stdout: "ignore",
+				stderr: "ignore",
+			})
 			s.flashNotice("Opened web UI")
 			return true
 		}

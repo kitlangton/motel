@@ -13,7 +13,12 @@
 
 import { RegistryProvider } from "@effect/atom-react"
 import { RGBA, TextAttributes, createCliRenderer } from "@opentui/core"
-import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
+import {
+	createRoot,
+	useKeyboard,
+	useRenderer,
+	useTerminalDimensions,
+} from "@opentui/react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { buildChunks, type Chunk } from "../ui/aiChatModel.ts"
 import { AiChatView } from "../ui/AiChatView.tsx"
@@ -58,14 +63,20 @@ const StoryApp = () => {
 
 	const fixture = FIXTURES[fixtureIdx] ?? FIXTURES[0]!
 
-	const detailState: AiCallDetailState = useMemo(() => ({
-		status: "ready",
-		spanId: fixture.span.spanId,
-		data: fixture.detail,
-		error: null,
-	}), [fixture])
+	const detailState: AiCallDetailState = useMemo(
+		() => ({
+			status: "ready",
+			spanId: fixture.span.spanId,
+			data: fixture.detail,
+			error: null,
+		}),
+		[fixture],
+	)
 
-	const chunks = useMemo<readonly Chunk[]>(() => buildChunks(fixture.detail), [fixture])
+	const chunks = useMemo<readonly Chunk[]>(
+		() => buildChunks(fixture.detail),
+		[fixture],
+	)
 
 	// Reset selection + expansion whenever fixture changes.
 	useEffect(() => {
@@ -76,7 +87,9 @@ const StoryApp = () => {
 
 	const move = (delta: number) => {
 		if (chunks.length === 0) return
-		const idx = selectedChunkId ? chunks.findIndex((c) => c.id === selectedChunkId) : 0
+		const idx = selectedChunkId
+			? chunks.findIndex((c) => c.id === selectedChunkId)
+			: 0
 		const next = chunks[Math.max(0, Math.min(idx + delta, chunks.length - 1))]
 		if (next) setSelectedChunkId(next.id)
 	}
@@ -104,17 +117,24 @@ const StoryApp = () => {
 			return
 		}
 		if (key.name === "k" || key.name === "up") {
-			if (detailChunkId) setDetailScrollOffset((current) => Math.max(0, current - 1))
+			if (detailChunkId)
+				setDetailScrollOffset((current) => Math.max(0, current - 1))
 			else move(-1)
 			return
 		}
 		if (key.name === "pagedown" || (key.ctrl && key.name === "d")) {
-			if (detailChunkId) setDetailScrollOffset((current) => current + Math.max(1, Math.floor(bodyLines / 2)))
+			if (detailChunkId)
+				setDetailScrollOffset(
+					(current) => current + Math.max(1, Math.floor(bodyLines / 2)),
+				)
 			else move(Math.max(1, Math.floor(chunks.length / 4)))
 			return
 		}
 		if (key.name === "pageup" || (key.ctrl && key.name === "u")) {
-			if (detailChunkId) setDetailScrollOffset((current) => Math.max(0, current - Math.max(1, Math.floor(bodyLines / 2))))
+			if (detailChunkId)
+				setDetailScrollOffset((current) =>
+					Math.max(0, current - Math.max(1, Math.floor(bodyLines / 2))),
+				)
 			else move(-Math.max(1, Math.floor(chunks.length / 4)))
 			return
 		}
@@ -125,7 +145,9 @@ const StoryApp = () => {
 					pendingGRef.current = false
 				} else {
 					pendingGRef.current = true
-					setTimeout(() => { pendingGRef.current = false }, 500)
+					setTimeout(() => {
+						pendingGRef.current = false
+					}, 500)
 				}
 				return
 			}
@@ -134,7 +156,9 @@ const StoryApp = () => {
 				pendingGRef.current = false
 			} else {
 				pendingGRef.current = true
-				setTimeout(() => { pendingGRef.current = false }, 500)
+				setTimeout(() => {
+					pendingGRef.current = false
+				}, 500)
 			}
 			return
 		}
@@ -161,17 +185,25 @@ const StoryApp = () => {
 		}
 	})
 
-	const bodyLines = Math.max(4, h - HEADER_ROWS - FOOTER_ROWS - 4 /* AI_CHAT_HEADER_ROWS */)
+	const bodyLines = Math.max(
+		4,
+		h - HEADER_ROWS - FOOTER_ROWS - 4 /* AI_CHAT_HEADER_ROWS */,
+	)
 
 	// Short compact labels — a single TextLine truncates with "..." if
 	// it overflows the padded content width, so we keep labels tight and
 	// use a single separator between items.
 	const fixtureList = FIXTURES.map((f, i) => (
 		<span key={f.id}>
-			<span fg={i === fixtureIdx ? colors.accent : colors.muted} attributes={i === fixtureIdx ? TextAttributes.BOLD : undefined}>
+			<span
+				fg={i === fixtureIdx ? colors.accent : colors.muted}
+				attributes={i === fixtureIdx ? TextAttributes.BOLD : undefined}
+			>
 				{`${i + 1} ${f.label}`}
 			</span>
-			{i < FIXTURES.length - 1 ? <span fg={colors.separator}>{" \u00b7 "}</span> : null}
+			{i < FIXTURES.length - 1 ? (
+				<span fg={colors.separator}>{" \u00b7 "}</span>
+			) : null}
 		</span>
 	))
 
@@ -181,10 +213,22 @@ const StoryApp = () => {
 	const contentWidth = Math.max(8, w - 2)
 
 	return (
-		<box width={w} height={h} flexDirection="column" backgroundColor={RGBA.fromHex(colors.screenBg)}>
-			<box paddingLeft={1} paddingRight={1} height={HEADER_ROWS} flexDirection="column">
+		<box
+			width={w}
+			height={h}
+			flexDirection="column"
+			backgroundColor={RGBA.fromHex(colors.screenBg)}
+		>
+			<box
+				paddingLeft={1}
+				paddingRight={1}
+				height={HEADER_ROWS}
+				flexDirection="column"
+			>
 				<TextLine>
-					<span fg={colors.muted} attributes={TextAttributes.BOLD}>AI CHAT</span>
+					<span fg={colors.muted} attributes={TextAttributes.BOLD}>
+						AI CHAT
+					</span>
 					<span fg={colors.separator}>{" \u00b7 "}</span>
 					{fixtureList}
 				</TextLine>
@@ -215,15 +259,25 @@ const StoryApp = () => {
 			<Divider width={contentWidth} />
 			<box paddingLeft={1} paddingRight={1} height={FOOTER_ROWS}>
 				<TextLine>
-					<span fg={colors.count} attributes={TextAttributes.BOLD}>1-9</span>
+					<span fg={colors.count} attributes={TextAttributes.BOLD}>
+						1-9
+					</span>
 					<span fg={colors.muted}>{" fixture  "}</span>
-					<span fg={colors.count} attributes={TextAttributes.BOLD}>j/k</span>
+					<span fg={colors.count} attributes={TextAttributes.BOLD}>
+						j/k
+					</span>
 					<span fg={colors.muted}>{" move  "}</span>
-					<span fg={colors.count} attributes={TextAttributes.BOLD}>enter</span>
+					<span fg={colors.count} attributes={TextAttributes.BOLD}>
+						enter
+					</span>
 					<span fg={colors.muted}>{" detail  "}</span>
-					<span fg={colors.count} attributes={TextAttributes.BOLD}>gg/G</span>
+					<span fg={colors.count} attributes={TextAttributes.BOLD}>
+						gg/G
+					</span>
 					<span fg={colors.muted}>{" top/bottom  "}</span>
-					<span fg={colors.count} attributes={TextAttributes.BOLD}>q</span>
+					<span fg={colors.count} attributes={TextAttributes.BOLD}>
+						q
+					</span>
 					<span fg={colors.muted}>{" quit"}</span>
 				</TextLine>
 			</box>
@@ -234,7 +288,9 @@ const StoryApp = () => {
 const renderer = await createCliRenderer({
 	exitOnCtrlC: false,
 	screenMode: "alternate-screen",
-	onDestroy: () => { process.exit(0) },
+	onDestroy: () => {
+		process.exit(0)
+	},
 })
 
 createRoot(renderer).render(

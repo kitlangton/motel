@@ -20,7 +20,11 @@ const SESSION = `motel-trace-width-${Date.now()}`
 
 const hasTuistory = async () => {
 	try {
-		const proc = Bun.spawn({ cmd: ["which", TUISTORY_BIN], stdout: "pipe", stderr: "ignore" })
+		const proc = Bun.spawn({
+			cmd: ["which", TUISTORY_BIN],
+			stdout: "pipe",
+			stderr: "ignore",
+		})
 		return (await proc.exited) === 0
 	} catch {
 		return false
@@ -28,7 +32,11 @@ const hasTuistory = async () => {
 }
 
 const tui = async (args: readonly string[]) => {
-	const proc = Bun.spawn({ cmd: [TUISTORY_BIN, ...args], stdout: "pipe", stderr: "pipe" })
+	const proc = Bun.spawn({
+		cmd: [TUISTORY_BIN, ...args],
+		stdout: "pipe",
+		stderr: "pipe",
+	})
 	const [stdout, stderr] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
@@ -36,7 +44,8 @@ const tui = async (args: readonly string[]) => {
 	return { code: await proc.exited, stdout, stderr }
 }
 
-const snapshot = async () => (await tui(["snapshot", "--session", SESSION])).stdout
+const snapshot = async () =>
+	(await tui(["snapshot", "--session", SESSION])).stdout
 
 const press = async (...keys: string[]) => {
 	await tui(["press", "--session", SESSION, ...keys])
@@ -47,7 +56,14 @@ const dividerWidth = (snap: string) =>
 	snap.split("\n").find((line) => line.startsWith("─"))?.length ?? 0
 
 const rootWaterfallRow = (snap: string) =>
-	snap.split("\n").find((line) => line.startsWith(" ▾ root.op") || line.startsWith(" ▸ root.op") || line.startsWith(" · root.op")) ?? null
+	snap
+		.split("\n")
+		.find(
+			(line) =>
+				line.startsWith(" ▾ root.op") ||
+				line.startsWith(" ▸ root.op") ||
+				line.startsWith(" · root.op"),
+		) ?? null
 
 describe("trace details waterfall width (end-to-end TUI)", () => {
 	const tempDir = mkdtempSync(join(tmpdir(), "motel-trace-width-"))
@@ -82,13 +98,20 @@ describe("trace details waterfall width (end-to-end TUI)", () => {
 		const launch = await tui([
 			"launch",
 			"bun run src/index.tsx",
-			"--session", SESSION,
-			"--cols", "96",
-			"--rows", "40",
-			"--cwd", process.cwd(),
-			"--env", `MOTEL_OTEL_DB_PATH=${dbPath}`,
-			"--env", "MOTEL_OTEL_ENABLED=false",
-			"--timeout", "15000",
+			"--session",
+			SESSION,
+			"--cols",
+			"96",
+			"--rows",
+			"40",
+			"--cwd",
+			process.cwd(),
+			"--env",
+			`MOTEL_OTEL_DB_PATH=${dbPath}`,
+			"--env",
+			"MOTEL_OTEL_ENABLED=false",
+			"--timeout",
+			"15000",
 		])
 		if (launch.code !== 0) throw new Error(`launch failed: ${launch.stderr}`)
 		await tui(["wait", "root.op", "--session", SESSION, "--timeout", "10000"])
@@ -97,7 +120,9 @@ describe("trace details waterfall width (end-to-end TUI)", () => {
 
 	afterAll(async () => {
 		if (canRun) await tui(["close", "--session", SESSION])
-		try { rmSync(tempDir, { recursive: true, force: true }) } catch {}
+		try {
+			rmSync(tempDir, { recursive: true, force: true })
+		} catch {}
 	})
 
 	it("fills the full-width trace details pane in narrow mode", async () => {

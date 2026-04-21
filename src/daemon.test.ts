@@ -19,7 +19,9 @@ interface Harness {
 }
 
 const makeHarness = (): Harness => {
-	const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "motel-daemon-test-"))
+	const runtimeDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "motel-daemon-test-"),
+	)
 	const port = randomPort()
 	const databasePath = path.join(runtimeDir, "telemetry.sqlite")
 	const manager = createDaemonManager({
@@ -114,14 +116,18 @@ describe("daemon manager", () => {
 		// supervisor's fast path will adopt without ever issuing an
 		// HTTP request.
 		const entryPath = path.join(registryInstancesDir, `${process.pid}.json`)
-		fs.writeFileSync(entryPath, JSON.stringify({
-			pid: process.pid,
-			url: `http://127.0.0.1:${harness.port}`,
-			workdir: process.cwd(),
-			startedAt: new Date().toISOString(),
-			version: "0.0.0-test",
-			databasePath: harness.databasePath,
-		}), "utf8")
+		fs.writeFileSync(
+			entryPath,
+			JSON.stringify({
+				pid: process.pid,
+				url: `http://127.0.0.1:${harness.port}`,
+				workdir: process.cwd(),
+				startedAt: new Date().toISOString(),
+				version: "0.0.0-test",
+				databasePath: harness.databasePath,
+			}),
+			"utf8",
+		)
 
 		// Park a real-but-slow listener on the port. If the supervisor
 		// ever falls back to HTTP we'd wait out the 5s delay; a passing
@@ -192,7 +198,9 @@ describe("daemon manager", () => {
 		expect(started.running).toBe(true)
 		expect(started.managed).toBe(true)
 		expect(typeof started.pid).toBe("number")
-		expect(started.databasePath).toBe(path.join(harness.runtimeDir, "telemetry.sqlite"))
+		expect(started.databasePath).toBe(
+			path.join(harness.runtimeDir, "telemetry.sqlite"),
+		)
 
 		const reused = await Effect.runPromise(harness.manager.ensure)
 		expect(reused.running).toBe(true)
@@ -229,8 +237,14 @@ describe("daemon manager", () => {
 	}, 20_000)
 
 	test("starts for the caller cwd even when motel is installed elsewhere", async () => {
-		const projectDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "motel-daemon-project-")))
-		const databasePath = path.join(projectDir, ".motel-data", "telemetry.sqlite")
+		const projectDir = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "motel-daemon-project-")),
+		)
+		const databasePath = path.join(
+			projectDir,
+			".motel-data",
+			"telemetry.sqlite",
+		)
 		let manager: ReturnType<typeof createDaemonManager> | null = null
 
 		try {
@@ -246,7 +260,9 @@ describe("daemon manager", () => {
 				expect(started.workdir).toBe(projectDir)
 				expect(started.sameWorkdir).toBe(true)
 				expect(started.databasePath).toBe(databasePath)
-				expect(started.logPath).toBe(path.join(projectDir, ".motel-data", "daemon.log"))
+				expect(started.logPath).toBe(
+					path.join(projectDir, ".motel-data", "daemon.log"),
+				)
 
 				const reused = await Effect.runPromise(manager.ensure)
 				expect(reused.pid).toBe(started.pid)

@@ -42,31 +42,44 @@ export const AttrFilterModal = ({
 	const top = Math.max(1, Math.floor(height / 6))
 	const innerWidth = panelWidth - 4
 	const rows = filterFacets(state.data, input)
-	const clampedIndex = rows.length === 0 ? 0 : Math.max(0, Math.min(selectedIndex, rows.length - 1))
+	const clampedIndex =
+		rows.length === 0
+			? 0
+			: Math.max(0, Math.min(selectedIndex, rows.length - 1))
 	const visibleRowCount = Math.max(5, Math.min(18, height - top - 8))
-	const windowStart = Math.max(0, clampedIndex - Math.floor(visibleRowCount / 2))
+	const windowStart = Math.max(
+		0,
+		clampedIndex - Math.floor(visibleRowCount / 2),
+	)
 	const windowEnd = Math.min(rows.length, windowStart + visibleRowCount)
 	const windowed = rows.slice(windowStart, windowEnd)
 
-	const title = mode === "keys"
-		? "Filter traces by attribute key"
-		: `Filter · ${truncateText(selectedKey ?? "", innerWidth - 14)}`
+	const title =
+		mode === "keys"
+			? "Filter traces by attribute key"
+			: `Filter · ${truncateText(selectedKey ?? "", innerWidth - 14)}`
 
-	const hint = mode === "keys"
-		? "type to narrow · ↑↓ move · enter select · esc cancel"
-		: "type to narrow · ↑↓ move · enter apply · backspace keys · esc cancel"
+	const hint =
+		mode === "keys"
+			? "type to narrow · ↑↓ move · enter select · esc cancel"
+			: "type to narrow · ↑↓ move · enter apply · backspace keys · esc cancel"
 
 	const countWidth = 7
 	const valueWidth = Math.max(10, innerWidth - countWidth - 1)
 
-	const renderRow = (row: { readonly value: string; readonly count: number }, isSelected: boolean) => {
+	const renderRow = (
+		row: { readonly value: string; readonly count: number },
+		isSelected: boolean,
+	) => {
 		const label = fitCell(row.value, valueWidth)
 		const count = String(row.count).padStart(countWidth - 1) + " "
 		if (isSelected) {
 			return (
 				<TextLine fg={colors.text} bg={colors.selectedBg}>
-					<span fg={colors.accent} attributes={TextAttributes.BOLD}>{label}</span>
-					<span fg={colors.muted}>{" "}</span>
+					<span fg={colors.accent} attributes={TextAttributes.BOLD}>
+						{label}
+					</span>
+					<span fg={colors.muted}> </span>
 					<span fg={colors.muted}>{count}</span>
 				</TextLine>
 			)
@@ -74,18 +87,42 @@ export const AttrFilterModal = ({
 		return (
 			<TextLine>
 				<span fg={colors.text}>{label}</span>
-				<span fg={colors.muted}>{" "}</span>
+				<span fg={colors.muted}> </span>
 				<span fg={colors.count}>{count}</span>
 			</TextLine>
 		)
 	}
 
 	return (
-		<box position="absolute" zIndex={3000} left={0} top={0} width={width} height={height} backgroundColor={RGBA.fromInts(0, 0, 0, 110)} onMouseUp={onClose}>
-			<box position="absolute" left={left} top={top} width={panelWidth} flexDirection="column" backgroundColor={RGBA.fromInts(20, 20, 28, 255)}>
-				<box paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} flexDirection="column">
+		<box
+			position="absolute"
+			zIndex={3000}
+			left={0}
+			top={0}
+			width={width}
+			height={height}
+			backgroundColor={RGBA.fromInts(0, 0, 0, 110)}
+			onMouseUp={onClose}
+		>
+			<box
+				position="absolute"
+				left={left}
+				top={top}
+				width={panelWidth}
+				flexDirection="column"
+				backgroundColor={RGBA.fromInts(20, 20, 28, 255)}
+			>
+				<box
+					paddingLeft={2}
+					paddingRight={2}
+					paddingTop={1}
+					paddingBottom={1}
+					flexDirection="column"
+				>
 					<TextLine>
-						<span fg={colors.count} attributes={TextAttributes.BOLD}>{truncateText(title, innerWidth)}</span>
+						<span fg={colors.count} attributes={TextAttributes.BOLD}>
+							{truncateText(title, innerWidth)}
+						</span>
 					</TextLine>
 					<TextLine>
 						<span fg={colors.muted}>{truncateText(hint, innerWidth)}</span>
@@ -93,16 +130,26 @@ export const AttrFilterModal = ({
 					<BlankRow />
 					<TextLine fg={colors.accent}>
 						<span fg={colors.muted}>{"\u203a "}</span>
-						<span fg={colors.text}>{truncateText(input, Math.max(1, innerWidth - 4))}</span>
+						<span fg={colors.text}>
+							{truncateText(input, Math.max(1, innerWidth - 4))}
+						</span>
 						<span fg={colors.accent}>{"\u2588"}</span>
 					</TextLine>
 					<BlankRow />
 					{state.status === "loading" && rows.length === 0 ? (
-						<TextLine><span fg={colors.muted}>loading…</span></TextLine>
+						<TextLine>
+							<span fg={colors.muted}>loading…</span>
+						</TextLine>
 					) : state.error ? (
-						<TextLine><span fg={colors.error}>{truncateText(state.error, innerWidth)}</span></TextLine>
+						<TextLine>
+							<span fg={colors.error}>
+								{truncateText(state.error, innerWidth)}
+							</span>
+						</TextLine>
 					) : rows.length === 0 ? (
-						<TextLine><span fg={colors.muted}>no matches</span></TextLine>
+						<TextLine>
+							<span fg={colors.muted}>no matches</span>
+						</TextLine>
 					) : (
 						windowed.map((row, i) => (
 							<box key={row.value} height={1}>
@@ -111,7 +158,11 @@ export const AttrFilterModal = ({
 						))
 					)}
 					{rows.length > windowEnd ? (
-						<TextLine><span fg={colors.muted}>{`+${rows.length - windowEnd} more…`}</span></TextLine>
+						<TextLine>
+							<span
+								fg={colors.muted}
+							>{`+${rows.length - windowEnd} more…`}</span>
+						</TextLine>
 					) : null}
 				</box>
 			</box>

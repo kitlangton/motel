@@ -9,8 +9,19 @@ export const shortFixture: ChatFixture = {
 	detail: makeDetail({
 		promptMessages: {
 			messages: [
-				{ role: "system", content: "You are a helpful assistant. Keep replies concise." },
-				{ role: "user", content: [{ type: "text", text: "Hey, can you explain what SQLite WAL mode means in one paragraph?" }] },
+				{
+					role: "system",
+					content: "You are a helpful assistant. Keep replies concise.",
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "Hey, can you explain what SQLite WAL mode means in one paragraph?",
+						},
+					],
+				},
 				{
 					role: "assistant",
 					content: [
@@ -22,6 +33,7 @@ export const shortFixture: ChatFixture = {
 				},
 			],
 		},
-		responseText: "WAL (write-ahead log) is a journaling mode in SQLite where writes are appended to a separate `.wal` file instead of rewriting the main database in place. Readers can keep reading the last committed snapshot from the main file while a writer is appending to the WAL, which means concurrent reads and writes don't block each other.",
+		responseText:
+			"WAL (write-ahead log) is a journaling mode in SQLite where writes are appended to a separate `.wal` file instead of rewriting the main database in place. Readers can keep reading the last committed snapshot from the main file while a writer is appending to the WAL, which means concurrent reads and writes don't block each other.",
 	}),
 }

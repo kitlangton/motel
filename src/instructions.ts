@@ -1,6 +1,7 @@
 import { config } from "./config.js"
 
-export const otelServerInstructions = () => `Motel is a local OpenTelemetry server for traces and logs. Use it for OTLP/HTTP ingestion and as a runtime evidence loop for debugging.
+export const otelServerInstructions =
+	() => `Motel is a local OpenTelemetry server for traces and logs. Use it for OTLP/HTTP ingestion and as a runtime evidence loop for debugging.
 
 Base URL: ${config.otel.queryUrl}
 

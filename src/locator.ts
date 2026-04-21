@@ -1,5 +1,9 @@
 import { Effect, Layer, Ref, Context } from "effect"
-import { listAliveEntries, MOTEL_SERVICE_ID, type RegistryEntry } from "./registry.js"
+import {
+	listAliveEntries,
+	MOTEL_SERVICE_ID,
+	type RegistryEntry,
+} from "./registry.js"
 
 export class LocatorError extends Error {
 	readonly _tag = "LocatorError"
@@ -10,7 +14,9 @@ export class LocatorError extends Error {
 
 const ambiguousDetail = (candidates: readonly RegistryEntry[]) =>
 	`Multiple motel instances running and none match cwd. Set MOTEL_URL to choose one:\n` +
-	candidates.map((c) => `  - ${c.url}  (workdir=${c.workdir}, pid=${c.pid})`).join("\n")
+	candidates
+		.map((c) => `  - ${c.url}  (workdir=${c.workdir}, pid=${c.pid})`)
+		.join("\n")
 
 type Resolved = {
 	readonly url: string
@@ -40,11 +46,16 @@ const handshake = (url: string): Effect.Effect<HealthShape, LocatorError> =>
 			if (!res.ok) throw new Error(`HTTP ${res.status}`)
 			const body = (await res.json()) as HealthShape
 			if (body.service !== MOTEL_SERVICE_ID) {
-				throw new Error(`service=${body.service} (expected ${MOTEL_SERVICE_ID})`)
+				throw new Error(
+					`service=${body.service} (expected ${MOTEL_SERVICE_ID})`,
+				)
 			}
 			return body
 		},
-		catch: (err) => new LocatorError(`Handshake with ${url} failed: ${(err as Error).message}`),
+		catch: (err) =>
+			new LocatorError(
+				`Handshake with ${url} failed: ${(err as Error).message}`,
+			),
 	})
 
 const pickByCwd = (entries: readonly RegistryEntry[], cwd: string) => {

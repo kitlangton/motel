@@ -28,7 +28,9 @@ const Lookback = Schema.optional(
 )
 
 const Limit = Schema.optional(
-	Schema.Number.annotate({ description: "Max items to return in this page. Tool defaults apply." }),
+	Schema.Number.annotate({
+		description: "Max items to return in this page. Tool defaults apply.",
+	}),
 )
 
 const Cursor = Schema.optional(
@@ -39,7 +41,9 @@ const Cursor = Schema.optional(
 )
 
 const ServiceParam = Schema.optional(
-	Schema.String.annotate({ description: "Filter by OTel service name (e.g. 'opencode', 'my-app')." }),
+	Schema.String.annotate({
+		description: "Filter by OTel service name (e.g. 'opencode', 'my-app').",
+	}),
 )
 
 const Status = Schema.optional(
@@ -51,7 +55,8 @@ const Status = Schema.optional(
 
 const Severity = Schema.optional(
 	Schema.String.annotate({
-		description: "Filter by log severity, e.g. TRACE, DEBUG, INFO, WARN, ERROR, FATAL.",
+		description:
+			"Filter by log severity, e.g. TRACE, DEBUG, INFO, WARN, ERROR, FATAL.",
 	}),
 )
 
@@ -101,11 +106,15 @@ const SearchTracesTool = Tool.make("motel_search_traces", {
 	parameters: Schema.Struct({
 		service: ServiceParam,
 		operation: Schema.optional(
-			Schema.String.annotate({ description: "Substring match on span operation name." }),
+			Schema.String.annotate({
+				description: "Substring match on span operation name.",
+			}),
 		),
 		status: Status,
 		minDurationMs: Schema.optional(
-			Schema.Number.annotate({ description: "Only return traces slower than this (ms)." }),
+			Schema.Number.annotate({
+				description: "Only return traces slower than this (ms).",
+			}),
 		),
 		attributes: Attributes,
 		lookback: Lookback,
@@ -119,7 +128,9 @@ const GetTraceTool = Tool.make("motel_get_trace", {
 	description:
 		"Fetch a single trace by its 32-character hex traceId, including the full span tree ordered parent-first. Use this to drill into a trace found via motel_search_traces. For the logs emitted inside this trace, use motel_get_trace_logs instead.",
 	parameters: Schema.Struct({
-		traceId: Schema.String.annotate({ description: "Full 32-character hex trace ID." }),
+		traceId: Schema.String.annotate({
+			description: "Full 32-character hex trace ID.",
+		}),
 	}),
 	success: Schema.Unknown,
 }).annotate(Tool.Readonly, true)
@@ -128,7 +139,9 @@ const GetTraceLogsTool = Tool.make("motel_get_trace_logs", {
 	description:
 		"Fetch log records correlated with a specific trace, across all spans. When investigating a failing trace, call this before motel_search_logs — it is the most scoped and usually the most informative log view.",
 	parameters: Schema.Struct({
-		traceId: Schema.String.annotate({ description: "Full 32-character hex trace ID." }),
+		traceId: Schema.String.annotate({
+			description: "Full 32-character hex trace ID.",
+		}),
 		lookback: Lookback,
 		limit: Limit,
 		cursor: Cursor,
@@ -140,7 +153,9 @@ const GetTraceSpansTool = Tool.make("motel_get_trace_spans", {
 	description:
 		"Fetch the flat span list for a specific trace. Use this when you already know the traceId and want to inspect span durations, status, parents, and raw attributes without the nested trace wrapper.",
 	parameters: Schema.Struct({
-		traceId: Schema.String.annotate({ description: "Full 32-character hex trace ID." }),
+		traceId: Schema.String.annotate({
+			description: "Full 32-character hex trace ID.",
+		}),
 	}),
 	success: Schema.Unknown,
 }).annotate(Tool.Readonly, true)
@@ -151,13 +166,19 @@ const SearchSpansTool = Tool.make("motel_search_spans", {
 	parameters: Schema.Struct({
 		service: ServiceParam,
 		traceId: Schema.optional(
-			Schema.String.annotate({ description: "Scope search to a single trace ID." }),
+			Schema.String.annotate({
+				description: "Scope search to a single trace ID.",
+			}),
 		),
 		operation: Schema.optional(
-			Schema.String.annotate({ description: "Substring match on span operation name." }),
+			Schema.String.annotate({
+				description: "Substring match on span operation name.",
+			}),
 		),
 		parentOperation: Schema.optional(
-			Schema.String.annotate({ description: "Substring match on parent operation name." }),
+			Schema.String.annotate({
+				description: "Substring match on parent operation name.",
+			}),
 		),
 		status: Status,
 		attributes: Attributes,
@@ -172,7 +193,9 @@ const GetSpanTool = Tool.make("motel_get_span", {
 	description:
 		"Fetch a single span by its 16-character hex spanId. Use this after motel_search_spans to inspect one span's full payload, parent trace, raw tags, and events.",
 	parameters: Schema.Struct({
-		spanId: Schema.String.annotate({ description: "Full 16-character hex span ID." }),
+		spanId: Schema.String.annotate({
+			description: "Full 16-character hex span ID.",
+		}),
 	}),
 	success: Schema.Unknown,
 }).annotate(Tool.Readonly, true)
@@ -181,7 +204,9 @@ const GetSpanLogsTool = Tool.make("motel_get_span_logs", {
 	description:
 		"Fetch log records correlated with a specific span. Use this after motel_get_span when you need the exact logs emitted from that one span, not the entire trace.",
 	parameters: Schema.Struct({
-		spanId: Schema.String.annotate({ description: "Full 16-character hex span ID." }),
+		spanId: Schema.String.annotate({
+			description: "Full 16-character hex span ID.",
+		}),
 		lookback: Lookback,
 		limit: Limit,
 		cursor: Cursor,
@@ -202,7 +227,9 @@ const SearchLogsTool = Tool.make("motel_search_logs", {
 			Schema.String.annotate({ description: "Filter by span ID." }),
 		),
 		body: Schema.optional(
-			Schema.String.annotate({ description: "Substring match on log body (case-sensitive)." }),
+			Schema.String.annotate({
+				description: "Substring match on log body (case-sensitive).",
+			}),
 		),
 		attributes: Attributes,
 		attributeContains: AttributeContains,
@@ -218,15 +245,44 @@ const SearchAiCallsTool = Tool.make("motel_search_ai_calls", {
 		"Search normalized AI calls such as streamText and generateText by session, provider, model, functionId, operation, duration, status, or free-text prompt/response content. Use this for LLM-specific investigations rather than raw span search.",
 	parameters: Schema.Struct({
 		service: ServiceParam,
-		traceId: Schema.optional(Schema.String.annotate({ description: "Filter by trace ID." })),
-		sessionId: Schema.optional(Schema.String.annotate({ description: "Filter by normalized AI sessionId." })),
-		functionId: Schema.optional(Schema.String.annotate({ description: "Filter by AI functionId, e.g. session.llm." })),
-		provider: Schema.optional(Schema.String.annotate({ description: "Filter by provider, e.g. openai.responses." })),
-		model: Schema.optional(Schema.String.annotate({ description: "Filter by model ID." })),
-		operation: Schema.optional(Schema.String.annotate({ description: "Filter by normalized AI operation, e.g. streamText." })),
+		traceId: Schema.optional(
+			Schema.String.annotate({ description: "Filter by trace ID." }),
+		),
+		sessionId: Schema.optional(
+			Schema.String.annotate({
+				description: "Filter by normalized AI sessionId.",
+			}),
+		),
+		functionId: Schema.optional(
+			Schema.String.annotate({
+				description: "Filter by AI functionId, e.g. session.llm.",
+			}),
+		),
+		provider: Schema.optional(
+			Schema.String.annotate({
+				description: "Filter by provider, e.g. openai.responses.",
+			}),
+		),
+		model: Schema.optional(
+			Schema.String.annotate({ description: "Filter by model ID." }),
+		),
+		operation: Schema.optional(
+			Schema.String.annotate({
+				description: "Filter by normalized AI operation, e.g. streamText.",
+			}),
+		),
 		status: Status,
-		minDurationMs: Schema.optional(Schema.Number.annotate({ description: "Only return AI calls slower than this (ms)." })),
-		text: Schema.optional(Schema.String.annotate({ description: "Case-insensitive substring match across prompt, response, and tool content." })),
+		minDurationMs: Schema.optional(
+			Schema.Number.annotate({
+				description: "Only return AI calls slower than this (ms).",
+			}),
+		),
+		text: Schema.optional(
+			Schema.String.annotate({
+				description:
+					"Case-insensitive substring match across prompt, response, and tool content.",
+			}),
+		),
 		lookback: Lookback,
 		limit: Limit,
 	}),
@@ -237,7 +293,9 @@ const GetAiCallTool = Tool.make("motel_get_ai_call", {
 	description:
 		"Fetch the full detail for one AI call by spanId, including complete prompt messages, response payloads, tool calls, token usage, provider metadata, and correlated logs.",
 	parameters: Schema.Struct({
-		spanId: Schema.String.annotate({ description: "The span ID of the AI call." }),
+		spanId: Schema.String.annotate({
+			description: "The span ID of the AI call.",
+		}),
 	}),
 	success: Schema.Unknown,
 }).annotate(Tool.Readonly, true)
@@ -246,8 +304,20 @@ const AiStatsTool = Tool.make("motel_ai_stats", {
 	description:
 		"Aggregate AI call statistics grouped by provider, model, functionId, sessionId, or status. Use this before paging raw AI calls when you want to understand which models are slowest or which functions consume the most tokens.",
 	parameters: Schema.Struct({
-		groupBy: Schema.Literals(["provider", "model", "functionId", "sessionId", "status"]),
-		agg: Schema.Literals(["count", "avg_duration", "p95_duration", "total_input_tokens", "total_output_tokens"]),
+		groupBy: Schema.Literals([
+			"provider",
+			"model",
+			"functionId",
+			"sessionId",
+			"status",
+		]),
+		agg: Schema.Literals([
+			"count",
+			"avg_duration",
+			"p95_duration",
+			"total_input_tokens",
+			"total_output_tokens",
+		]),
 		service: ServiceParam,
 		traceId: Schema.optional(Schema.String),
 		sessionId: Schema.optional(Schema.String),
@@ -274,7 +344,9 @@ const GetDocTool = Tool.make("motel_get_doc", {
 	description:
 		"Fetch a bundled motel documentation page as markdown text. Useful for giving an agent the exact debug workflow or Effect instrumentation guidance without leaving MCP.",
 	parameters: Schema.Struct({
-		name: Schema.String.annotate({ description: "Document name, e.g. 'debug' or 'effect'." }),
+		name: Schema.String.annotate({
+			description: "Document name, e.g. 'debug' or 'effect'.",
+		}),
 	}),
 	success: Schema.Unknown,
 }).annotate(Tool.Readonly, true)
@@ -291,9 +363,15 @@ const TraceStatsTool = Tool.make("motel_traces_stats", {
 		"Aggregate statistics across traces: count, average duration, p95 duration, or error rate, grouped by a field like service, operation, status, or attr.<key>. Use this BEFORE paginating raw traces when you want to understand the shape of the data — for example 'what tools are the slowest' or 'which services are erroring'.",
 	parameters: Schema.Struct({
 		groupBy: Schema.String.annotate({
-			description: "Grouping dimension. Examples: 'service', 'operation', 'status', 'attr.tool.name'.",
+			description:
+				"Grouping dimension. Examples: 'service', 'operation', 'status', 'attr.tool.name'.",
 		}),
-		agg: Schema.Literals(["count", "avg_duration", "p95_duration", "error_rate"]),
+		agg: Schema.Literals([
+			"count",
+			"avg_duration",
+			"p95_duration",
+			"error_rate",
+		]),
 		service: ServiceParam,
 		operation: Schema.optional(Schema.String),
 		status: Status,
@@ -310,7 +388,8 @@ const LogStatsTool = Tool.make("motel_logs_stats", {
 		"Group and count logs by a field like 'severity', 'service', 'scope', or 'attr.<key>'. Useful for quickly understanding log-level distribution (e.g. how many ERROR logs there are in the last hour) before drilling into individual entries.",
 	parameters: Schema.Struct({
 		groupBy: Schema.String.annotate({
-			description: "Grouping dimension. Examples: 'service', 'severity', 'scope', 'attr.session.id'.",
+			description:
+				"Grouping dimension. Examples: 'service', 'severity', 'scope', 'attr.session.id'.",
 		}),
 		service: ServiceParam,
 		traceId: Schema.optional(Schema.String),
@@ -385,7 +464,8 @@ const ToolHandlers = MotelToolkit.toLayer(
 			motel_get_trace_logs: ({ traceId, lookback, limit, cursor }) =>
 				asResult(client.getTraceLogs(traceId, { lookback, limit, cursor })),
 
-			motel_get_trace_spans: ({ traceId }) => asResult(client.getTraceSpans(traceId)),
+			motel_get_trace_spans: ({ traceId }) =>
+				asResult(client.getTraceSpans(traceId)),
 
 			motel_search_spans: (input) => asResult(client.searchSpans(input)),
 
@@ -408,7 +488,8 @@ const ToolHandlers = MotelToolkit.toLayer(
 
 			motel_docs_index: () => asResult(client.docs),
 
-			motel_get_doc: ({ name }) => asResult(Effect.map(client.getDoc(name), (data) => ({ data }))),
+			motel_get_doc: ({ name }) =>
+				asResult(Effect.map(client.getDoc(name), (data) => ({ data }))),
 
 			motel_openapi: () => asResult(client.openapi),
 		}

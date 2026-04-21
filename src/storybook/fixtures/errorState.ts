@@ -13,11 +13,24 @@ export const errorFixture: ChatFixture = {
 		durationMs: 820,
 		promptMessages: {
 			messages: [
-				{ role: "user", content: [{ type: "text", text: "Grab the latest commits from main." }] },
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Grab the latest commits from main." },
+					],
+				},
 				{
 					role: "assistant",
 					content: [
-						{ type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "git fetch origin main && git log --oneline -5 origin/main" } },
+						{
+							type: "tool-call",
+							toolCallId: "tc-1",
+							toolName: "bash",
+							input: {
+								command:
+									"git fetch origin main && git log --oneline -5 origin/main",
+							},
+						},
 					],
 				},
 				{
@@ -27,14 +40,21 @@ export const errorFixture: ChatFixture = {
 							type: "tool-result",
 							toolCallId: "tc-1",
 							toolName: "bash",
-							output: { error: "HTTP 429 rate limited", code: 429, retryable: true },
+							output: {
+								error: "HTTP 429 rate limited",
+								code: 429,
+								retryable: true,
+							},
 						},
 					],
 				},
 				{
 					role: "assistant",
 					content: [
-						{ type: "text", text: "The request was rate-limited. I'll retry after a delay — or you can rerun manually." },
+						{
+							type: "text",
+							text: "The request was rate-limited. I'll retry after a delay — or you can rerun manually.",
+						},
 					],
 				},
 			],

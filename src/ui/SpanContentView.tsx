@@ -2,7 +2,13 @@ import { TextAttributes } from "@opentui/core"
 import { useMemo } from "react"
 import { isAiSpan, type TraceSpanItem } from "../domain.ts"
 import { formatDuration, lifecycleLabel, wrapTextLines } from "./format.ts"
-import { AlignedHeaderLine, BlankRow, Divider, PlainLine, TextLine } from "./primitives.tsx"
+import {
+	AlignedHeaderLine,
+	BlankRow,
+	Divider,
+	PlainLine,
+	TextLine,
+} from "./primitives.tsx"
 import { colors, SEPARATOR } from "./theme.ts"
 
 /** Header above the attribute list: "SPAN CONTENT" + status/duration strip. */
@@ -49,13 +55,26 @@ export const SpanContentView = ({
 }) => {
 	if (!span) {
 		return (
-			<box flexDirection="column" width={paneWidth} height={bodyLines + SPAN_CONTENT_HEADER_ROWS} overflow="hidden">
+			<box
+				flexDirection="column"
+				width={paneWidth}
+				height={bodyLines + SPAN_CONTENT_HEADER_ROWS}
+				overflow="hidden"
+			>
 				<box paddingLeft={1} paddingRight={1}>
-					<AlignedHeaderLine left="SPAN CONTENT" right="no span selected" width={contentWidth} rightFg={colors.muted} />
+					<AlignedHeaderLine
+						left="SPAN CONTENT"
+						right="no span selected"
+						width={contentWidth}
+						rightFg={colors.muted}
+					/>
 				</box>
 				<BlankRow />
 				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-					<PlainLine text="Select a span in the waterfall to view its full content." fg={colors.muted} />
+					<PlainLine
+						text="Select a span in the waterfall to view its full content."
+						fg={colors.muted}
+					/>
 				</box>
 			</box>
 		)
@@ -63,7 +82,10 @@ export const SpanContentView = ({
 
 	const entries = Object.entries(span.tags)
 	const selected = Math.max(0, Math.min(selectedAttrIndex, entries.length - 1))
-	const valueWrapWidth = Math.max(16, contentWidth - VALUE_INDENT.length - CURSOR_WIDTH)
+	const valueWrapWidth = Math.max(
+		16,
+		contentWidth - VALUE_INDENT.length - CURSOR_WIDTH,
+	)
 	const aiFlag = isAiSpan(span.tags)
 
 	// Block layout is memoised on entries identity — otherwise every j/k
@@ -119,9 +141,19 @@ export const SpanContentView = ({
 			: colors.passing
 
 	return (
-		<box flexDirection="column" width={paneWidth} height={bodyLines + SPAN_CONTENT_HEADER_ROWS} overflow="hidden">
+		<box
+			flexDirection="column"
+			width={paneWidth}
+			height={bodyLines + SPAN_CONTENT_HEADER_ROWS}
+			overflow="hidden"
+		>
 			<box paddingLeft={1} paddingRight={1}>
-				<AlignedHeaderLine left="SPAN CONTENT" right={headerStatus} width={contentWidth} rightFg={headerStatusColor} />
+				<AlignedHeaderLine
+					left="SPAN CONTENT"
+					right={headerStatus}
+					width={contentWidth}
+					rightFg={headerStatusColor}
+				/>
 			</box>
 			<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 				<TextLine>
@@ -133,7 +165,9 @@ export const SpanContentView = ({
 					<span fg={colors.separator}>{SEPARATOR}</span>
 					<span fg={colors.muted}>{span.scopeName ?? "no scope"}</span>
 					<span fg={colors.separator}>{SEPARATOR}</span>
-					<span fg={span.isRunning ? colors.warning : colors.muted}>{lifecycleLabel(span)}</span>
+					<span fg={span.isRunning ? colors.warning : colors.muted}>
+						{lifecycleLabel(span)}
+					</span>
 					<span fg={colors.separator}>{SEPARATOR}</span>
 					<span fg={colors.muted}>{span.spanId.slice(0, 16)}</span>
 					<span fg={colors.separator}>{SEPARATOR}</span>
@@ -155,8 +189,15 @@ export const SpanContentView = ({
 						return (
 							<box key={`${span.spanId}-${block.key}`} flexDirection="column">
 								<TextLine>
-									<span fg={isSelected ? colors.accent : colors.separator}>{cursor}</span>
-									<span fg={keyColor} attributes={isSelected ? TextAttributes.BOLD : undefined}>{block.key}</span>
+									<span fg={isSelected ? colors.accent : colors.separator}>
+										{cursor}
+									</span>
+									<span
+										fg={keyColor}
+										attributes={isSelected ? TextAttributes.BOLD : undefined}
+									>
+										{block.key}
+									</span>
 								</TextLine>
 								{block.valueLines.length === 0 ? (
 									<TextLine>
@@ -167,7 +208,9 @@ export const SpanContentView = ({
 									block.valueLines.map((line, i) => (
 										<TextLine key={i}>
 											<span fg={colors.separator}>{VALUE_INDENT}</span>
-											<span fg={isSelected ? colors.text : colors.muted}>{line}</span>
+											<span fg={isSelected ? colors.text : colors.muted}>
+												{line}
+											</span>
 										</TextLine>
 									))
 								)}
