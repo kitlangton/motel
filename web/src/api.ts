@@ -1,4 +1,3 @@
-import { Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AtomHttpApi } from "effect/unstable/reactivity"
 import { MotelHttpApi } from "@motel/httpApi"

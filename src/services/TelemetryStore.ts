@@ -1531,26 +1531,24 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) =>
 				},
 			)
 
-			const listServices = Effect.fn("motel/TelemetryStore.listServices")(
-				function* () {
-					const cutoff =
-						(yield* Clock.currentTimeMillis) -
-						config.otel.traceLookbackMinutes * 60 * 1000
-					return yield* Effect.sync(() => {
-						const rows = db
-							.query(
-								`
+			const listServices = Effect.gen(function* () {
+				const cutoff =
+					(yield* Clock.currentTimeMillis) -
+					config.otel.traceLookbackMinutes * 60 * 1000
+				return yield* Effect.sync(() => {
+					const rows = db
+						.query(
+							`
 					SELECT service_name FROM spans WHERE start_time_ms >= ?
 					UNION
 					SELECT service_name FROM logs WHERE timestamp_ms >= ?
 					ORDER BY service_name ASC
 				`,
-							)
-							.all(cutoff, cutoff) as Array<{ service_name: string }>
-						return rows.map((row) => row.service_name)
-					})
-				},
-			)()
+						)
+						.all(cutoff, cutoff) as Array<{ service_name: string }>
+					return rows.map((row) => row.service_name)
+				})
+			}).pipe(Effect.withSpan("motel/TelemetryStore.listServices"))
 
 			const loadTracesByIds = (traceIds: readonly string[]) => {
 				if (traceIds.length === 0) return [] as readonly TraceItem[]

@@ -216,44 +216,43 @@ export const MotelClientLive = Layer.effect(
 	Effect.gen(function* () {
 		const locator = yield* Locator
 
-		const get = <A = unknown>(
+		const get = Effect.fnUntraced(function* <A = unknown>(
 			path: string,
 			query?: Query,
 			attributes?: AttributeFilters,
 			attributeContains?: AttributeFilters,
-		) =>
-			Effect.gen(function* () {
-				const { url } = yield* Effect.mapError(
-					locator.resolve,
-					(err) => new MotelHttpError(0, err.message),
-				)
-				const target = appendAllAttributes(
-					appendQuery(new URL(path, url), query),
-					attributes,
-					attributeContains,
-				)
-				return yield* Effect.tryPromise({
-					try: async () => {
-						const res = await fetch(target, {
-							signal: AbortSignal.timeout(5000),
-						})
-						const body = (await res
-							.json()
-							.catch(() => ({ error: "invalid json" }))) as A
-						if (!res.ok)
-							throw new MotelHttpError(res.status, JSON.stringify(body))
-						return body
-					},
-					catch: (err) =>
-						err instanceof MotelHttpError
-							? err
-							: new MotelHttpError(0, (err as Error).message),
-				}).pipe(
-					Effect.tapError((err) =>
-						err.status === 0 ? locator.invalidate : Effect.void,
-					),
-				)
-			})
+		) {
+			const { url } = yield* Effect.mapError(
+				locator.resolve,
+				(err) => new MotelHttpError(0, err.message),
+			)
+			const target = appendAllAttributes(
+				appendQuery(new URL(path, url), query),
+				attributes,
+				attributeContains,
+			)
+			return yield* Effect.tryPromise({
+				try: async () => {
+					const res = await fetch(target, {
+						signal: AbortSignal.timeout(5000),
+					})
+					const body = (await res
+						.json()
+						.catch(() => ({ error: "invalid json" }))) as A
+					if (!res.ok)
+						throw new MotelHttpError(res.status, JSON.stringify(body))
+					return body
+				},
+				catch: (err) =>
+					err instanceof MotelHttpError
+						? err
+						: new MotelHttpError(0, (err as Error).message),
+			}).pipe(
+				Effect.tapError((err) =>
+					err.status === 0 ? locator.invalidate : Effect.void,
+				),
+			)
+		})
 
 		return {
 			searchTraces: (input) =>

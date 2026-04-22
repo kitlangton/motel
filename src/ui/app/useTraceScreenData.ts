@@ -47,6 +47,7 @@ import { isAiSpan } from "../../domain.ts"
 import { buildChunks, type Chunk } from "../aiChatModel.ts"
 import { parseFilterText } from "../filterParser.ts"
 import { getVisibleSpans } from "../waterfallModel.ts"
+import { Cause, Effect, Schedule } from "effect"
 
 const clampSelectionIndex = (index: number, length: number) => {
 	if (length === 0) return 0
@@ -59,7 +60,7 @@ const resolveEffectiveService = (
 ) =>
 	services.includes(selectedTraceService ?? "")
 		? selectedTraceService
-		: (selectedTraceService ?? services[0] ?? config.otel.serviceName)
+		: (services[0] ?? config.otel.serviceName)
 
 const loadTraceSummariesForService = (
 	serviceName: string | null,
@@ -224,39 +225,34 @@ export const useTraceScreenData = () => {
 	}, [selectedTraceService])
 
 	useEffect(() => {
-		let cancelled = false
-
-		const load = async () => {
+		const poll = Effect.gen(function* () {
 			setTraceState((current) => ({
 				...current,
 				status: current.fetchedAt === null ? "loading" : "ready",
 				error: null,
 			}))
 
-			try {
-				const services = await loadTraceServices()
-				if (cancelled) return
+			const services = new Set<string>([
+				...(selectedTraceService ? [selectedTraceService] : []),
+				...(yield* Effect.promise(loadTraceServices)),
+			])
+			for (const service of services) {
+				const traces = yield* Effect.tryPromise(() =>
+					loadTraceSummariesForService(service, {
+						activeAttrKey,
+						activeAttrValue,
+						debouncedAiText,
+					}),
+				).pipe(Effect.orElseSucceed(() => []))
 
-				const effectiveService = resolveEffectiveService(
-					services,
-					selectedTraceService,
-				)
+				if (traces.length === 0) continue
 
-				if (effectiveService !== selectedTraceService) {
-					setSelectedTraceService(effectiveService)
-				}
-
-				const traces = await loadTraceSummariesForService(effectiveService, {
-					activeAttrKey,
-					activeAttrValue,
-					debouncedAiText,
-				})
-				if (cancelled) return
+				setSelectedTraceService(service)
 
 				const prevTraceId = selectedTraceRef.current
 				setTraceState({
 					status: "ready",
-					services,
+					services: Array.from(services),
 					data: traces,
 					error: null,
 					fetchedAt: new Date(),
@@ -265,20 +261,26 @@ export const useTraceScreenData = () => {
 					const newIndex = traces.findIndex((t) => t.traceId === prevTraceId)
 					if (newIndex >= 0) setSelectedTraceIndex(newIndex)
 				}
-			} catch (error) {
-				if (cancelled) return
+				return true
+			}
+
+			return false
+		}).pipe(
+			Effect.catchCause((cause) => {
 				setTraceState((current) => ({
 					...current,
 					status: "error",
-					error: error instanceof Error ? error.message : String(error),
+					error: Cause.prettyErrors(cause)[0].message,
 				}))
-			}
-		}
+				return Effect.succeed(false)
+			}),
+			Effect.repeat({
+				while: (hasData) => !hasData,
+				schedule: Schedule.spaced("3 seconds"),
+			}),
+		)
 
-		void load()
-		return () => {
-			cancelled = true
-		}
+		return Effect.runCallback(poll)
 	}, [
 		refreshNonce,
 		selectedTraceService,

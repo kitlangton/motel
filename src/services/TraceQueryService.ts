@@ -108,16 +108,11 @@ export const TraceQueryServiceLive = Layer.effect(
 	Effect.gen(function* () {
 		const store = yield* TelemetryStore
 
-		const listServices = Effect.fn("motel/TraceQueryService.listServices")(
-			function* () {
-				const services = yield* store.listServices
-				yield* Effect.annotateCurrentSpan(
-					"trace.service_count",
-					services.length,
-				)
-				return services
-			},
-		)()
+		const listServices = Effect.gen(function* () {
+			const services = yield* store.listServices
+			yield* Effect.annotateCurrentSpan("trace.service_count", services.length)
+			return services
+		}).pipe(Effect.withSpan("motel/TraceQueryService.listServices"))
 
 		const listRecentTraces = Effect.fn(
 			"motel/TraceQueryService.listRecentTraces",
