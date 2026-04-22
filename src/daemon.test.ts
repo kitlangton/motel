@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { gzipSync } from "node:zlib"
 import { createDaemonManager } from "./daemon.js"
 import { MOTEL_SERVICE_ID } from "./registry.js"
 
@@ -262,5 +263,37 @@ describe("daemon manager", () => {
 			})
 			fs.rmSync(projectDir, { recursive: true, force: true })
 		}
+	})
+})
+
+describe("OTLP ingest", () => {
+	test("accepts gzip-compressed trace payloads", async () => {
+		const harness = makeHarness()
+		activeHarnesses.push(harness)
+		await Effect.runPromise(harness.manager.ensure)
+
+		const payload = {
+			resourceSpans: [
+				{
+					resource: {
+						attributes: [{ key: "service.name", value: { stringValue: "test" } }],
+					},
+					scopeSpans: [{ spans: [{ traceId: "abc", spanId: "def", name: "test" }] }],
+				},
+			],
+		}
+
+		const compressed = gzipSync(Buffer.from(JSON.stringify(payload)))
+
+		const res = await fetch(`http://127.0.0.1:${harness.port}/v1/traces`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Content-Encoding": "gzip",
+			},
+			body: compressed,
+		})
+
+		expect(res.status).toBe(200)
 	})
 })
