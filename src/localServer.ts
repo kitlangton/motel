@@ -11,6 +11,7 @@ import * as BunHttpServer from "@effect/platform-bun/BunHttpServer"
 import { MotelHttpApi } from "./httpApi.js"
 import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries } from "./queryFilters.js"
 import { MOTEL_SERVICE_ID, MOTEL_VERSION, removeRegistryEntry, writeRegistryEntry } from "./registry.js"
+import { respondOtlpIngest } from "./otlpIngestResponse.js"
 import { AsyncIngest, AsyncIngestLive } from "./services/AsyncIngest.js"
 import { LogQueryService, LogQueryServiceLive } from "./services/LogQueryService.js"
 import { TelemetryStore, TelemetryStoreLive, TelemetryStoreReadonlyLive } from "./services/TelemetryStore.js"
@@ -296,24 +297,19 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			// so the main event loop stays free during heavy SQLite writes.
 			// Everything else still uses the direct TelemetryStore — reads
 			// are fast enough that IPC overhead isn't worth paying.
+			//
+			// `respondOtlpIngest` maps predictable failure modes to typed
+			// HTTP statuses: wrong Content-Type → 415 (with a hint at the
+			// exporter knob), bad JSON → 400. The previous default of 500
+			// for every failure made protocol-mismatch debugging opaque.
 			.handleRaw("ingestTraces", ({ request }) =>
-				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
-						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
-							(result) => jsonResponse(result),
-						),
-					),
+				respondOtlpIngest(request, (payload) =>
+					Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
 				),
 			)
 			.handleRaw("ingestLogs", ({ request }) =>
-				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
-						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
-							(result) => jsonResponse(result),
-						),
-					),
+				respondOtlpIngest(request, (payload) =>
+					Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
 				),
 			)
 			.handleRaw("services", () => respondJson(Effect.map(withTraceQuery((store) => store.listServices), (data) => ({ data }))))
