@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Duration, Effect, Schema, SchemaGetter } from "effect"
 import {
 	HttpApi,
 	HttpApiEndpoint,
@@ -18,13 +18,38 @@ import {
 	LogItem,
 } from "./domain.js"
 
+const Cursor = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal("trace"),
+		startedAt: Schema.Number,
+		id: Schema.String,
+	}),
+	Schema.Struct({
+		kind: Schema.Literal("log"),
+		timestamp: Schema.Number,
+		id: Schema.String,
+	}),
+])
+const CursorFromBase64 = Schema.StringFromBase64Url.pipe(
+	Schema.decodeTo(Schema.fromJsonString(Cursor)),
+)
+
+export class NotFoundError extends Schema.ErrorClass<NotFoundError>(
+	"NotFoundError",
+)(
+	{
+		_tag: Schema.tagDefaultOmit("NotFoundError"),
+		error: Schema.String,
+	},
+	{ httpApiStatus: 404 },
+) {}
 const ErrorResponse = Schema.Struct({ error: Schema.String })
 const Meta = Schema.Struct({
 	limit: Schema.Number,
 	lookback: Schema.String,
 	returned: Schema.Number,
 	truncated: Schema.Boolean,
-	nextCursor: Schema.NullOr(Schema.String),
+	nextCursor: Schema.NullOr(CursorFromBase64),
 }).annotate({ identifier: "ListMeta" })
 
 const ServiceList = Schema.Struct({ data: Schema.Array(Schema.String) })
@@ -108,17 +133,79 @@ const AiCallList = Schema.Struct({
 })
 const AiCallDetailResponse = Schema.Struct({ data: AiCallDetail })
 
-// Shared query parameter schemas
-const LookbackParam = Schema.optionalKey(Schema.String).pipe(
-	Schema.annotateKey({
-		description:
-			"Time window to look back. Examples: 30m, 1h, 6h, 1d. Default: 90m",
+const clampLookback = Duration.clamp({
+	minimum: Duration.seconds(1),
+	maximum: Duration.days(1),
+})
+const LookbackDuration = Schema.TemplateLiteral([
+	Schema.Number.check(Schema.isGreaterThan(0)),
+	Schema.Literals(["s", "m", "h", "d"]),
+]).pipe(
+	Schema.decodeTo(Schema.Duration, {
+		decode: SchemaGetter.transform((s) => {
+			const [, amount, unit] = s.match(/^(\d+)([smhd])$/i) as [
+				string,
+				string,
+				string,
+			]
+			const value = Number.parseInt(amount, 10)
+			switch (unit) {
+				case "s":
+					return clampLookback(Duration.seconds(value))
+				case "m":
+					return clampLookback(Duration.minutes(value))
+				case "h":
+					return clampLookback(Duration.hours(value))
+				case "d":
+					return clampLookback(Duration.days(value))
+			}
+			return Duration.minutes(60)
+		}),
+		encode: SchemaGetter.transform((d) => `${Duration.toSeconds(d)}s` as const),
 	}),
+	(s) =>
+		s.annotate({
+			description: "Time window to look back. Examples: 30m, 1h, 6h, 1d.",
+		}),
 )
-const LimitParam = Schema.optionalKey(Schema.Number).pipe(
+
+// Shared query parameter schemas
+const LookbackParam = LookbackDuration.pipe(
+	Schema.withDecodingDefault(Effect.succeed("60m")),
+	(s) =>
+		s.annotate({
+			description:
+				"Time window to look back. Examples: 30m, 1h, 6h, 1d. Default: 60m",
+		}),
+)
+const TraceLimitParam = Schema.Number.check(
+	Schema.isBetween({
+		maximum: 1,
+		minimum: 100,
+	}),
+).pipe(
+	Schema.withDecodingDefault(Effect.succeed(20)),
 	Schema.annotateKey({ description: "Maximum number of results to return" }),
 )
-const CursorParam = Schema.optionalKey(Schema.String).pipe(
+const LogLimitParam = Schema.Number.check(
+	Schema.isBetween({
+		maximum: 1,
+		minimum: 500,
+	}),
+).pipe(
+	Schema.withDecodingDefault(Effect.succeed(100)),
+	Schema.annotateKey({ description: "Maximum number of results to return" }),
+)
+const SpanLimitParam = Schema.Number.check(
+	Schema.isBetween({
+		maximum: 1,
+		minimum: 500,
+	}),
+).pipe(
+	Schema.withDecodingDefault(Effect.succeed(100)),
+	Schema.annotateKey({ description: "Maximum number of results to return" }),
+)
+const CursorParam = Schema.optionalKey(CursorFromBase64).pipe(
 	Schema.annotateKey({
 		description: "Opaque pagination cursor from a previous response",
 	}),
@@ -187,7 +274,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 				HttpApiEndpoint.get("traces", "/api/traces", {
 					query: {
 						service: ServiceParam,
-						limit: LimitParam,
+						limit: TraceLimitParam,
 						lookback: LookbackParam,
 						cursor: CursorParam,
 					},
@@ -227,7 +314,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 							}),
 						),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: TraceLimitParam,
 						cursor: CursorParam,
 					},
 					success: TraceSummaryList,
@@ -257,7 +344,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						status: Schema.optionalKey(TraceSpanStatus),
 						minDurationMs: Schema.optionalKey(Schema.Number),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: TraceLimitParam,
 					},
 					success: StatList,
 					error: ErrorResponse,
@@ -277,7 +364,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						),
 					},
 					success: TraceResponse,
-					error: ErrorResponse,
+					error: [ErrorResponse, NotFoundError],
 				})
 					.annotate(OpenApi.Summary, "Get a single trace")
 					.annotate(
@@ -294,7 +381,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						),
 					},
 					success: HtmlText,
-					error: ErrorResponse,
+					error: [ErrorResponse, NotFoundError],
 				})
 					.annotate(OpenApi.Summary, "Render a browser trace page")
 					.annotate(
@@ -312,7 +399,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 					},
 					query: {
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: LogLimitParam,
 						cursor: CursorParam,
 					},
 					success: LogList,
@@ -348,7 +435,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						),
 					},
 					success: SpanResponse,
-					error: ErrorResponse,
+					error: [ErrorResponse, NotFoundError],
 				})
 					.annotate(OpenApi.Summary, "Get a single span")
 					.annotate(
@@ -366,7 +453,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 					},
 					query: {
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: LogLimitParam,
 						cursor: CursorParam,
 					},
 					success: LogList,
@@ -389,7 +476,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						parentOperation: Schema.optionalKey(Schema.String),
 						status: Schema.optionalKey(TraceSpanStatus),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: SpanLimitParam,
 					},
 					success: PaginatedSpanList,
 				})
@@ -421,7 +508,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 							}),
 						),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: LogLimitParam,
 						cursor: CursorParam,
 					},
 					success: LogList,
@@ -445,7 +532,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						spanId: Schema.optionalKey(Schema.String),
 						body: Schema.optionalKey(Schema.String),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: LogLimitParam,
 						cursor: CursorParam,
 					},
 					success: LogList,
@@ -470,7 +557,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						spanId: Schema.optionalKey(Schema.String),
 						body: Schema.optionalKey(Schema.String),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: LogLimitParam,
 					},
 					success: StatList,
 					error: ErrorResponse,
@@ -498,7 +585,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						),
 					},
 					success: PlainText,
-					error: ErrorResponse,
+					error: [ErrorResponse, NotFoundError],
 				})
 					.annotate(OpenApi.Summary, "Get a documentation page")
 					.annotate(
@@ -528,7 +615,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						),
 						service: ServiceParam,
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: TraceLimitParam,
 					},
 					success: FacetList,
 					error: ErrorResponse,
@@ -580,7 +667,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 							}),
 						),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: TraceLimitParam,
 					},
 					success: AiCallList,
 				})
@@ -637,7 +724,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						status: Schema.optionalKey(TraceSpanStatus),
 						minDurationMs: Schema.optionalKey(Schema.Number),
 						lookback: LookbackParam,
-						limit: LimitParam,
+						limit: TraceLimitParam,
 					},
 					success: StatList,
 					error: ErrorResponse,
