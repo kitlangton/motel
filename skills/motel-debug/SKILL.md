@@ -16,7 +16,7 @@ Default local server details:
 - OTLP logs: `POST /v1/logs`
 - Query API: `GET /api/*`
 - OpenAPI: `GET /openapi.json`
-- Header: `Content-Type: application/json`
+- Header: `Content-Type: application/json` or `Content-Type: application/x-protobuf`
 - Auth: none by default
 
 If the user provides a different motel URL, use that instead of the default.

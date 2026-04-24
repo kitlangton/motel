@@ -62,6 +62,9 @@ http://127.0.0.1:27686/v1/traces
 http://127.0.0.1:27686/v1/logs
 ```
 
+OTLP/HTTP requests may use either `Content-Type: application/json` or
+`Content-Type: application/x-protobuf`.
+
 Motel keeps everything in a local SQLite database at
 `.motel-data/telemetry.sqlite`. No Docker, no cloud account.
 

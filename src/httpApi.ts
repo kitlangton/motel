@@ -84,14 +84,14 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 					success: IngestTraceResponse,
 				})
 					.annotate(OpenApi.Summary, "Ingest OTLP traces")
-					.annotate(OpenApi.Description, "Accepts OTLP HTTP trace export requests and stores them in the local SQLite telemetry store."),
+					.annotate(OpenApi.Description, "Accepts OTLP HTTP trace export requests as protobuf-JSON or protobuf and stores them in the local SQLite telemetry store."),
 
 				HttpApiEndpoint.post("ingestLogs", "/v1/logs", {
 					payload: Schema.Unknown,
 					success: IngestLogResponse,
 				})
 					.annotate(OpenApi.Summary, "Ingest OTLP logs")
-					.annotate(OpenApi.Description, "Accepts OTLP HTTP log export requests and stores them in the local SQLite telemetry store."),
+					.annotate(OpenApi.Description, "Accepts OTLP HTTP log export requests as protobuf-JSON or protobuf and stores them in the local SQLite telemetry store."),
 
 				HttpApiEndpoint.get("services", "/api/services", { success: ServiceList })
 					.annotate(OpenApi.Summary, "List active services")
