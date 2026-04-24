@@ -7,7 +7,7 @@ Base URL: ${config.otel.queryUrl}
 OTLP ingest:
 - Traces: POST ${config.otel.exporterUrl}
 - Logs: POST ${config.otel.logsExporterUrl}
-- Content-Type: application/json
+- Content-Type: application/json or application/x-protobuf
 - No auth required
 
 Query endpoints:

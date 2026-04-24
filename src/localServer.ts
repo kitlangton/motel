@@ -16,6 +16,7 @@ import { LogQueryService, LogQueryServiceLive } from "./services/LogQueryService
 import { TelemetryStore, TelemetryStoreLive, TelemetryStoreReadonlyLive } from "./services/TelemetryStore.js"
 import { TraceQueryService, TraceQueryServiceLive } from "./services/TraceQueryService.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
+import { decodeLogProtobuf, decodeTraceProtobuf } from "./otlpProtobuf.js"
 import { lifecycleLabel } from "./ui/format.js"
 
 // Set by the RegistryLayer acquisition once the Bun socket has bound.
@@ -43,6 +44,19 @@ const requestUrl = (request: { readonly url: string }) => new URL(request.url, c
 const withStore = <A>(f: (store: TelemetryStore["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TelemetryStore.asEffect(), f)
 const withTraceQuery = <A>(f: (query: TraceQueryService["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TraceQueryService.asEffect(), f)
 const withLogQuery = <A>(f: (query: LogQueryService["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(LogQueryService.asEffect(), f)
+type OtlpHttpRequest = {
+	readonly headers: Readonly<Record<string, string | undefined>>
+	readonly json: Effect.Effect<unknown, unknown>
+	readonly arrayBuffer: Effect.Effect<ArrayBuffer, unknown>
+}
+const isProtobufContentType = (contentType: string | undefined) => {
+	const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase()
+	return mediaType === "application/x-protobuf" || mediaType === "application/protobuf"
+}
+const otlpRequestBody = (request: OtlpHttpRequest, decodeProtobuf: (bytes: Uint8Array) => unknown) =>
+	isProtobufContentType(request.headers["content-type"])
+		? Effect.map(request.arrayBuffer, (body) => decodeProtobuf(new Uint8Array(body)))
+		: request.json
 // Response-building helpers are generic in R so a handler can depend
 // on TelemetryStore (query path) or AsyncIngest (worker-RPC path)
 // without forcing every handler onto the same service surface.
@@ -298,7 +312,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			// are fast enough that IPC overhead isn't worth paying.
 			.handleRaw("ingestTraces", ({ request }) =>
 				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
+					Effect.flatMap(otlpRequestBody(request, decodeTraceProtobuf), (payload) =>
 						Effect.map(
 							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
 							(result) => jsonResponse(result),
@@ -308,7 +322,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			)
 			.handleRaw("ingestLogs", ({ request }) =>
 				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
+					Effect.flatMap(otlpRequestBody(request, decodeLogProtobuf), (payload) =>
 						Effect.map(
 							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
 							(result) => jsonResponse(result),
