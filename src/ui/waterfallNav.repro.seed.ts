@@ -48,7 +48,7 @@ const span = (
 	endTimeUnixNano: ms(endMs),
 })
 
-const program = Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+const program = Effect.flatMap(TelemetryStore, (store) =>
 	store.ingestTraces({
 		resourceSpans: [
 			{

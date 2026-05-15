@@ -125,7 +125,7 @@ const seedStore = async (
 		const traceCount = Math.min(batchSize, traces - start)
 		const payload = makeTraceBatch(start, traceCount, startedAtNanos)
 		await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.ingestTraces(payload)).pipe(
+			Effect.flatMap(TelemetryStore, (store) => store.ingestTraces(payload)).pipe(
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		)
@@ -135,7 +135,7 @@ const seedStore = async (
 const runOne = async (loaded: LoadedRuntime): Promise<Sample> => {
 	const startedAt = performance.now()
 	const result = await loaded.queryRuntime.runPromise(
-		Effect.flatMap(loaded.TraceQueryService.asEffect(), (store) =>
+		Effect.flatMap(loaded.TraceQueryService, (store) =>
 			store.searchSpans({
 				serviceName: "bench-api",
 				operation: "search.target",

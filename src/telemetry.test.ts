@@ -24,7 +24,7 @@ describe("motel telemetry store", () => {
 		const nowNanos = BigInt(Date.now()) * 1_000_000n
 		const oneSecond = 1_000_000_000n
 
-		const ingest = Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+		const ingest = Effect.flatMap(TelemetryStore, (store) =>
 				Effect.flatMap(
 					store.ingestTraces({
 					resourceSpans: [
@@ -127,7 +127,7 @@ describe("motel telemetry store", () => {
 						},
 					],
 				}),
-			).pipe(Effect.flatMap(() => Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			).pipe(Effect.flatMap(() => Effect.flatMap(TelemetryStore, (store) =>
 				store.ingestTraces({
 					resourceSpans: [{
 						resource: { attributes: [{ key: "service.name", value: { stringValue: "test-api" } }] },
@@ -293,7 +293,7 @@ describe("motel telemetry store", () => {
 
 	it("filters traces by attr.* fields", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchTraces({
 					serviceName: "test-api",
 					attributeFilters: {
@@ -310,7 +310,7 @@ describe("motel telemetry store", () => {
 
 	it("looks up a span directly by spanId", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.getSpan("child-1")).pipe(
+			Effect.flatMap(TelemetryStore, (store) => store.getSpan("child-1")).pipe(
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		)
@@ -323,7 +323,7 @@ describe("motel telemetry store", () => {
 
 	it("filters logs by spanId", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchLogs({
 					spanId: "child-1",
 				}),
@@ -336,7 +336,7 @@ describe("motel telemetry store", () => {
 
 	it("searches spans by operation, parent operation, and attr filters", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchSpans({
 					serviceName: "test-api",
 					operation: "tool.call",
@@ -356,7 +356,7 @@ describe("motel telemetry store", () => {
 
 	it("lists spans for a trace", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.listTraceSpans("trace-1")).pipe(
+			Effect.flatMap(TelemetryStore, (store) => store.listTraceSpans("trace-1")).pipe(
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		)
@@ -371,7 +371,7 @@ describe("motel telemetry store", () => {
 
 	it("aggregates trace stats by operation", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.traceStats({
 					groupBy: "operation",
 					agg: "avg_duration",
@@ -389,7 +389,7 @@ describe("motel telemetry store", () => {
 
 	it("aggregates log stats by severity", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.logStats({
 					groupBy: "severity",
 					agg: "count",
@@ -415,7 +415,7 @@ describe("motel telemetry store", () => {
 
 	it("lists trace summaries without loading spans", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.listTraceSummaries(null),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -433,7 +433,7 @@ describe("motel telemetry store", () => {
 
 	it("lists trace summaries filtered by service", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.listTraceSummaries("test-api"),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -443,7 +443,7 @@ describe("motel telemetry store", () => {
 
 	it("searches trace summaries with status filter", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchTraceSummaries({
 					serviceName: "test-api",
 					status: "error",
@@ -457,7 +457,7 @@ describe("motel telemetry store", () => {
 
 	it("searches trace summaries with attribute filters", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchTraceSummaries({
 					serviceName: "test-api",
 					attributeFilters: { sessionID: "session-1" },
@@ -471,7 +471,7 @@ describe("motel telemetry store", () => {
 
 	it("searches trace summaries with operation filter", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchTraceSummaries({
 					serviceName: "test-api",
 					operation: "tool.call",
@@ -485,7 +485,7 @@ describe("motel telemetry store", () => {
 
 	it("filters logs by severity", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchLogs({ serviceName: "test-api", severity: "ERROR" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -497,7 +497,7 @@ describe("motel telemetry store", () => {
 
 	it("filters logs by severity case-insensitively", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchLogs({ serviceName: "test-api", severity: "error" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -508,7 +508,7 @@ describe("motel telemetry store", () => {
 
 	it("searches log body case-insensitively", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchLogs({ serviceName: "test-api", body: "STREAM FAILED" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -519,7 +519,7 @@ describe("motel telemetry store", () => {
 
 	it("searches spans by traceId", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchSpans({ traceId: "trace-1" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -530,7 +530,7 @@ describe("motel telemetry store", () => {
 
 	it("searches spans with attrContains substring filter", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchSpans({
 					serviceName: "test-api",
 					attributeContainsFilters: { sessionID: "session" },
@@ -544,7 +544,7 @@ describe("motel telemetry store", () => {
 
 	it("searches spans with attrContains case-insensitively", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchSpans({
 					serviceName: "test-api",
 					attributeContainsFilters: { modelID: "GPT" },
@@ -558,7 +558,7 @@ describe("motel telemetry store", () => {
 
 	it("searches logs with attrContains substring filter", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchLogs({
 					serviceName: "test-api",
 					attributeContainsFilters: { tool: "sea" },
@@ -572,7 +572,7 @@ describe("motel telemetry store", () => {
 
 	it("combines severity and body filters", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchLogs({ serviceName: "test-api", severity: "INFO", body: "tool" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -583,7 +583,7 @@ describe("motel telemetry store", () => {
 
 	it("computes facet status without N+1 queries", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.listFacets({
 					type: "traces",
 					field: "status",
@@ -600,7 +600,7 @@ describe("motel telemetry store", () => {
 
 	it("computes logStats with SQL aggregation", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.logStats({
 					groupBy: "service",
 					agg: "count",
@@ -616,7 +616,7 @@ describe("motel telemetry store", () => {
 
 	it("computes traceStats count via SQL", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.traceStats({
 					groupBy: "status",
 					agg: "count",
@@ -634,7 +634,7 @@ describe("motel telemetry store", () => {
 
 	it("computes traceStats error_rate via SQL", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.traceStats({
 					groupBy: "service",
 					agg: "error_rate",
@@ -681,7 +681,7 @@ describe("motel telemetry store", () => {
 
 	it("searches AI calls and returns compact summaries", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({}),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -704,7 +704,7 @@ describe("motel telemetry store", () => {
 
 	it("dedupes nested doStream spans from AI summaries", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ sessionId: "ses_test123" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -715,7 +715,7 @@ describe("motel telemetry store", () => {
 
 	it("filters AI calls by model", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ model: "claude-opus-4" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -727,7 +727,7 @@ describe("motel telemetry store", () => {
 
 	it("filters AI calls by sessionId", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ sessionId: "ses_test123" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -738,7 +738,7 @@ describe("motel telemetry store", () => {
 
 	it("searches AI calls by text content", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ text: "joke about programming" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -751,7 +751,7 @@ describe("motel telemetry store", () => {
 		// Verifies FTS indexes ai.response.text, not just ai.prompt*. The
 		// seeded ai-stream-2 has response "Error: rate limited".
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ text: "rate limited" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -762,7 +762,7 @@ describe("motel telemetry store", () => {
 		// unicode61 tokenizer is case-insensitive by default; prefix `*`
 		// handles partial terms like `"PROG"` matching `"programming"`.
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ text: "PROG" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -773,7 +773,7 @@ describe("motel telemetry store", () => {
 		// FTS5 treats `"`, `*`, `-`, `:` as operators; toFtsQuery must
 		// strip them so raw user input never crashes the query.
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ text: `"joke" - about:programming*` }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -782,7 +782,7 @@ describe("motel telemetry store", () => {
 
 	it("filters AI calls by operation type", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.searchAiCalls({ operation: "generateText" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -793,7 +793,7 @@ describe("motel telemetry store", () => {
 
 	it("gets AI call detail with full payloads", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.getAiCall("ai-stream-1"),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -811,7 +811,7 @@ describe("motel telemetry store", () => {
 
 	it("returns null for non-AI span in getAiCall", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.getAiCall("root-1"),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -821,7 +821,7 @@ describe("motel telemetry store", () => {
 
 	it("aggregates AI call stats by model", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.aiCallStats({ groupBy: "model", agg: "count" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
@@ -835,7 +835,7 @@ describe("motel telemetry store", () => {
 
 	it("aggregates AI call stats by status", async () => {
 		const result = await storeRuntime.runPromise(
-			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+			Effect.flatMap(TelemetryStore, (store) =>
 				store.aiCallStats({ groupBy: "status", agg: "count" }),
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)

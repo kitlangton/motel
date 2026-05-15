@@ -57,6 +57,6 @@ const resourceSpans = specs.map((spec) => ({
 }))
 
 await storeRuntime.runPromise(
-	Effect.flatMap(TelemetryStore.asEffect(), (store) => store.ingestTraces({ resourceSpans })),
+	Effect.flatMap(TelemetryStore, (store) => store.ingestTraces({ resourceSpans })),
 )
 process.exit(0)

@@ -131,7 +131,7 @@ const runOne = async (seed: number): Promise<Sample> => {
 			const payload = makePayload(seed)
 			const startedAt = performance.now()
 			const result = await loaded.storeRuntime.runPromise(
-				Effect.flatMap(loaded.TelemetryStore.asEffect(), (store) => store.ingestTraces(payload)).pipe(
+				Effect.flatMap(loaded.TelemetryStore, (store) => store.ingestTraces(payload)).pipe(
 					Effect.provideService(References.MinimumLogLevel, "None"),
 				),
 			)
