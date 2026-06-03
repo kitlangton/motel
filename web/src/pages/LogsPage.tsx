@@ -1,19 +1,18 @@
 import { useMemo, useState, Suspense } from "react"
-import { useSearchParams, Link } from "react-router-dom"
+import { useSearchParams } from "react-router-dom"
 import { useAtomValue } from "@effect/atom-react"
 import type { AsyncResult } from "effect/unstable/reactivity"
 import { MotelClient } from "../api"
 import {
 	PageContainer,
 	RefreshButton,
-	SeverityBadge,
 	SearchInput,
 	FilterPill,
 	LoadingState,
 	ErrorState,
 	EmptyState,
 } from "../components/shared"
-import { formatTimestamp, serviceColor } from "../format"
+import { LogTable, type LogRecord } from "../components/LogTable"
 
 const SEVERITIES = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] as const
 
@@ -72,10 +71,10 @@ export function LogsPage() {
 			</div>
 
 			{/* Table */}
-			<div className="flex-1 overflow-auto">
-				<div className="mx-auto max-w-7xl">
+			<div className="flex-1 overflow-hidden">
+				<div className="mx-auto max-w-7xl h-full">
 					<Suspense fallback={<LoadingState message="Loading logs..." />}>
-						<LogTable atom={logsAtom} />
+						<LogsResult atom={logsAtom} />
 					</Suspense>
 				</div>
 			</div>
@@ -83,9 +82,9 @@ export function LogsPage() {
 	)
 }
 
-function LogTable({ atom }: { atom: any }) {
+function LogsResult({ atom }: { atom: any }) {
 	const result = useAtomValue(atom) as AsyncResult.AsyncResult<{
-		data: Array<{ id: string; timestamp: Date; serviceName: string; severityText: string; body: string; traceId: string | null }>
+		data: LogRecord[]
 	}>
 
 	if (result._tag !== "Success") {
@@ -96,30 +95,5 @@ function LogTable({ atom }: { atom: any }) {
 	const logs = result.value.data
 	if (!logs.length) return <EmptyState title="No logs found" />
 
-	return (
-		<table className="w-full">
-			<thead>
-				<tr className="text-left text-sm text-zinc-500 sticky top-0 bg-zinc-950">
-					<th className="whitespace-nowrap pb-2 pt-3 pl-6 pr-4 font-medium w-[7rem]">Time</th>
-					<th className="whitespace-nowrap pb-2 pt-3 px-4 font-medium w-16">Level</th>
-					<th className="whitespace-nowrap pb-2 pt-3 px-4 font-medium w-28">Service</th>
-					<th className="whitespace-nowrap pb-2 pt-3 pl-4 pr-6 font-medium">Body</th>
-				</tr>
-			</thead>
-			<tbody>
-				{logs.map((log) => (
-					<tr key={log.id} className="border-t border-white/5 hover:bg-white/[0.03]">
-						<td className="py-2 pl-6 pr-4 text-sm tabular-nums text-zinc-500 align-top whitespace-nowrap">{formatTimestamp(log.timestamp)}</td>
-						<td className="py-2 px-4 align-top"><SeverityBadge severity={log.severityText} /></td>
-						<td className="py-2 px-4 text-sm align-top whitespace-nowrap" style={{ color: serviceColor(log.serviceName) }}>{log.serviceName}</td>
-						<td className="py-2 pl-4 pr-6 text-sm text-zinc-300 whitespace-pre-wrap break-words align-top">
-							{log.traceId ? (
-								<Link to={`/trace/${log.traceId}`} className="text-inherit no-underline hover:text-accent">{log.body}</Link>
-							) : log.body}
-						</td>
-					</tr>
-				))}
-			</tbody>
-		</table>
-	)
+	return <LogTable logs={logs} className="h-full" />
 }

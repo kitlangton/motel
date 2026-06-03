@@ -13,7 +13,8 @@ interface WaterfallProps {
 }
 
 const ROW_HEIGHT = 26
-const LABEL_WIDTH = 440
+const MAX_LABEL_WIDTH = 440
+const MIN_LABEL_WIDTH = 260
 const AXIS_HEIGHT = 26
 const TICK_COUNT = 5
 const INDENT = 16
@@ -36,15 +37,27 @@ type View = { start: number; end: number }
 export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId, onSelectSpan, logs }: WaterfallProps) {
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const timelineRef = useRef<HTMLDivElement>(null)
+	const [containerWidth, setContainerWidth] = useState(MAX_LABEL_WIDTH * 2)
 
 	// View window in fractional units of total trace duration: [0..1]
 	const [view, setView] = useState<View>({ start: 0, end: 1 })
 	const isZoomed = view.start > 0.0005 || view.end < 0.9995
+	const labelWidth = Math.round(Math.max(MIN_LABEL_WIDTH, Math.min(MAX_LABEL_WIDTH, containerWidth * 0.46)))
 
 	// Reset view when the trace changes
 	useEffect(() => {
 		setView({ start: 0, end: 1 })
 	}, [spans])
+
+	useEffect(() => {
+		const el = scrollRef.current
+		if (!el) return
+		const update = () => setContainerWidth(el.clientWidth)
+		update()
+		const observer = new ResizeObserver(update)
+		observer.observe(el)
+		return () => observer.disconnect()
+	}, [])
 
 	const logCounts = useMemo(() => {
 		const counts = new Map<string, number>()
@@ -183,8 +196,8 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 	const handleWheel = useCallback((e: React.WheelEvent) => {
 		const rect = timelineRef.current?.getBoundingClientRect()
 		if (!rect) return
-		const barColumnLeft = rect.left + LABEL_WIDTH
-		const barColumnWidth = rect.width - LABEL_WIDTH
+		const barColumnLeft = rect.left + labelWidth
+		const barColumnWidth = rect.width - labelWidth
 		if (barColumnWidth <= 0) return
 		// Horizontal scroll → pan
 		if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
@@ -201,7 +214,7 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 			zoomAt(Math.max(0, Math.min(1, anchor)), factor)
 		}
 		// Plain vertical scroll falls through to scroll the row list
-	}, [view, panBy, zoomAt])
+	}, [view, panBy, zoomAt, labelWidth])
 
 	// Drag to pan on empty timeline area (middle-click or click in gaps)
 	const dragStart = useRef<{ x: number; viewStart: number; moved: boolean } | null>(null)
@@ -213,7 +226,7 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 		const onMove = (e: MouseEvent) => {
 			if (!dragStart.current || !timelineRef.current) return
 			const rect = timelineRef.current.getBoundingClientRect()
-			const barWidth = rect.width - LABEL_WIDTH
+			const barWidth = rect.width - labelWidth
 			if (barWidth <= 0) return
 			const span = view.end - view.start
 			const dx = e.clientX - dragStart.current.x
@@ -234,7 +247,7 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 			window.removeEventListener("mousemove", onMove)
 			window.removeEventListener("mouseup", onUp)
 		}
-	}, [view])
+	}, [view, labelWidth])
 
 	if (!spans.length) {
 		return (
@@ -279,7 +292,7 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 			>
 				<div
 					className="shrink-0 border-r border-white/10 flex items-center justify-between px-2 text-sm text-zinc-600"
-					style={{ width: LABEL_WIDTH }}
+					style={{ width: labelWidth }}
 				>
 					<span className="tabular-nums">
 						{isZoomed && `${(1 / viewSpan).toFixed(1)}×`}
@@ -315,7 +328,7 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 			{/* Rows */}
 			<div className="relative w-full" style={{ height: totalHeight }}>
 				{/* Full-height gridlines aligned with view ticks */}
-				<div className="absolute pointer-events-none" style={{ left: LABEL_WIDTH, right: 0, top: 0, bottom: 0 }}>
+				<div className="absolute pointer-events-none" style={{ left: labelWidth, right: 0, top: 0, bottom: 0 }}>
 					{ticks.slice(1, -1).map((t) => (
 						<div
 							key={t.ms}
@@ -368,7 +381,7 @@ export function Waterfall({ spans, traceStartMs, traceDurationMs, selectedSpanId
 							{/* Label column */}
 							<div
 								className="shrink-0 flex items-center gap-1.5 overflow-hidden border-r border-white/5 pr-2 relative"
-								style={{ width: LABEL_WIDTH, paddingLeft: labelIndent }}
+								style={{ width: labelWidth, paddingLeft: labelIndent }}
 							>
 								{Array.from({ length: span.depth }, (_, i) => (
 									<div
