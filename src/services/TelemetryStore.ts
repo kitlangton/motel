@@ -1603,7 +1603,7 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 					params.push(input.serviceName)
 				}
 				if (input.severity) {
-					clauses.push(`severity_text = ?`)
+					clauses.push(`severity_text = ? COLLATE NOCASE`)
 					params.push(input.severity.toUpperCase())
 				}
 				if (input.traceId) {
@@ -1816,7 +1816,7 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 					const group = input.groupBy === "service"
 						? log.serviceName
 						: input.groupBy === "severity"
-							? log.severityText
+							? log.severityText.toUpperCase()
 							: input.groupBy === "scope"
 								? log.scopeName ?? "unknown"
 								: isAttrGroupBy
@@ -1862,7 +1862,7 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 				const groupExpr = input.groupBy === "service"
 					? "service_name"
 					: input.groupBy === "severity"
-						? "severity_text"
+						? "UPPER(severity_text)"
 						: input.groupBy === "scope"
 							? "COALESCE(scope_name, 'unknown')"
 							: "'unknown'"
@@ -1903,11 +1903,11 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 					}
 					if (input.field === "severity") {
 						const rows = db.query(`
-							SELECT severity_text AS value, COUNT(*) AS count
+							SELECT UPPER(severity_text) AS value, COUNT(*) AS count
 							FROM logs
 							WHERE timestamp_ms >= ?
 							${input.serviceName ? "AND service_name = ?" : ""}
-							GROUP BY severity_text
+							GROUP BY value
 							ORDER BY count DESC, value ASC
 							LIMIT ?
 						`).all(...(input.serviceName ? [cutoff, input.serviceName, limit] : [cutoff, limit])) as Array<{ value: string; count: number }>
