@@ -5,7 +5,7 @@ import { Cause, Clock, Effect, FileSystem, Layer, Schedule, Context } from "effe
 import { config } from "../config.js"
 import type { AiCallDetail, AiCallSummary, FacetItem, LogItem, SpanItem, StatsItem, TraceItem, TraceSummaryItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
 import { AI_ATTR_MAP, AI_FTS_KEYS, AI_TEXT_SEARCH_KEYS, truncatePreview } from "../domain.js"
-import { attributeMap, nanosToMilliseconds, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
+import { attributeMap, nanosToMilliseconds, normalizeOtlpBinaryId, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
 
 const isSqliteLockError = (error: unknown) =>
 	error instanceof Error && /(database is locked|database table is locked|SQLITE_BUSY)/i.test(error.message)
@@ -1164,6 +1164,12 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 							const scopeName = scopeSpans.scope?.name ?? null
 
 							for (const span of scopeSpans.spans ?? []) {
+								// Accept both hex (OTLP/JSON spec) and base64 (proto3 JSON default
+								// used by naive exporters like Python's google.protobuf.json_format).
+								const traceId = normalizeOtlpBinaryId(span.traceId, 16)
+								const spanId = normalizeOtlpBinaryId(span.spanId, 8)
+								if (!traceId || !spanId) continue
+								const parentSpanId = normalizeOtlpBinaryId(span.parentSpanId, 8)
 								const spanAttributes = attributeMap(span.attributes)
 								const mergedAttributes = { ...resourceAttributes, ...spanAttributes }
 								const startTimeMs = nanosToMilliseconds(span.startTimeUnixNano)
@@ -1175,9 +1181,9 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 								}))
 
 								insertSpan.run(
-									span.traceId,
-									span.spanId,
-									span.parentSpanId ?? null,
+									traceId,
+									spanId,
+									parentSpanId,
 									serviceName,
 									scopeName,
 									span.name ?? "unknown",
@@ -1190,10 +1196,10 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 									JSON.stringify(resourceAttributes),
 									JSON.stringify(events),
 								)
-								deleteSpanAttributes.run(span.traceId, span.spanId)
-								insertSpanAttributesMany(span.traceId, span.spanId, mergedAttributes)
-								touchedOperations.push([span.traceId, span.spanId, span.name ?? "unknown"])
-								touchedTraceIds.add(span.traceId)
+								deleteSpanAttributes.run(traceId, spanId)
+								insertSpanAttributesMany(traceId, spanId, mergedAttributes)
+								touchedOperations.push([traceId, spanId, span.name ?? "unknown"])
+								touchedTraceIds.add(traceId)
 								insertedSpans += 1
 							}
 						}
@@ -1233,9 +1239,11 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 								const mergedAttributes = { ...resourceAttributes, ...attributes }
 								const timestampMs = nanosToMilliseconds(record.timeUnixNano ?? record.observedTimeUnixNano)
 								const body = stringifyValue(parseAnyValue(record.body))
+								const rawTraceId = attributes.traceId || attributes.trace_id || record.traceId || null
+								const rawSpanId = attributes.spanId || attributes.span_id || record.spanId || null
 								const result = insertLog.run(
-									attributes.traceId || attributes.trace_id || record.traceId || null,
-									attributes.spanId || attributes.span_id || record.spanId || null,
+									normalizeOtlpBinaryId(rawTraceId, 16),
+									normalizeOtlpBinaryId(rawSpanId, 8),
 									serviceName,
 									scopeName,
 									record.severityText ?? "INFO",

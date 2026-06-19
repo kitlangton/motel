@@ -15,6 +15,8 @@ import { TelemetryStoreReadonly } from "./services/TelemetryStore.js"
 import { TelemetryQueryLive } from "./services/TelemetryQuery.js"
 import type { LogItem, TraceItem } from "./domain.js"
 import { lifecycleLabel } from "./ui/format.js"
+import { decodeProtobufLogs, decodeProtobufTraces } from "./otlpProtobuf.js"
+import type { OtlpLogExportRequest, OtlpTraceExportRequest } from "./otlp.js"
 
 // Set by the RegistryLayer acquisition once the Bun socket has bound.
 // Both /api/health and the registry entry read from here so they agree
@@ -56,6 +58,28 @@ const respondRaw = <R>(effect: Effect.Effect<ReturnType<typeof jsonResponse>, un
 		onFailure: (error) => jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500),
 		onSuccess: (value) => value,
 	})
+
+/**
+ * Read an OTLP ingest body, choosing the decoder by `Content-Type`.
+ *
+ * Falls back to JSON for anything that isn't an `application/x-protobuf`
+ * variant — this matches the spec, keeps backwards compatibility with the
+ * existing JSON-only clients, and tolerates clients that omit the header.
+ */
+const readOtlpBody = <T>(
+	request: {
+		readonly json: Effect.Effect<unknown, unknown>
+		readonly arrayBuffer: Effect.Effect<ArrayBuffer, unknown>
+		readonly headers: Readonly<Record<string, string | undefined>>
+	},
+	decodeProtobuf: (bytes: Uint8Array) => T,
+): Effect.Effect<T, unknown> => {
+	const ct = (request.headers["content-type"] ?? "").toLowerCase()
+	if (ct.includes("application/x-protobuf") || ct.includes("application/protobuf")) {
+		return Effect.map(request.arrayBuffer, (buf) => decodeProtobuf(new Uint8Array(buf)))
+	}
+	return Effect.map(request.json, (payload) => payload as T)
+}
 
 // Log page loader: takes the parsed list params + any resource-specific
 // filter values (service, severity, traceId, spanId, body), runs the
@@ -178,23 +202,31 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			// so the main event loop stays free during heavy SQLite writes.
 			// Read queries use a separate query worker so synchronous SQLite
 			// work cannot block the HTTP event loop.
+			// Ingest accepts both OTLP/HTTP+JSON (`application/json`) and
+			// OTLP/HTTP+protobuf (`application/x-protobuf`). The protobuf
+			// branch decodes via the OTLP protobufjs root and toObject()'s
+			// it into the same plain shape JSON ingest produces.
 			.handleRaw("ingestTraces", ({ request }) =>
 				HttpMiddleware.withLoggerDisabled(respondRaw(
-					Effect.flatMap(request.json, (payload) =>
-						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
-							(result) => jsonResponse(result),
-						),
+					Effect.flatMap(
+						readOtlpBody<OtlpTraceExportRequest>(request, decodeProtobufTraces),
+						(payload) =>
+							Effect.map(
+								Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
+								(result) => jsonResponse(result),
+							),
 					),
 				)),
 			)
 			.handleRaw("ingestLogs", ({ request }) =>
 				HttpMiddleware.withLoggerDisabled(respondRaw(
-					Effect.flatMap(request.json, (payload) =>
-						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
-							(result) => jsonResponse(result),
-						),
+					Effect.flatMap(
+						readOtlpBody<OtlpLogExportRequest>(request, decodeProtobufLogs),
+						(payload) =>
+							Effect.map(
+								Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
+								(result) => jsonResponse(result),
+							),
 					),
 				)),
 			)

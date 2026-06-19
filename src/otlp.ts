@@ -140,3 +140,41 @@ export const spanKindLabel = (kind: number | undefined): string | null => {
 }
 
 export const spanStatusLabel = (code: number | undefined): "ok" | "error" => (code === 2 ? "error" : "ok")
+
+/**
+ * Normalize an OTLP `bytes` ID (traceId/spanId/parentSpanId/link IDs) to
+ * lowercase hex of the expected byte length.
+ *
+ * OTLP/JSON spec mandates lowercase hex for these fields (a deviation from
+ * proto3 JSON's default base64). Some clients — notably anything using
+ * `google.protobuf.json_format.MessageToJson` on the wire — emit base64.
+ * Accepting both keeps motel compatible with naive JSON exporters.
+ *
+ * Returns `null` for absent/empty IDs (lets us drop empty parent IDs).
+ */
+export const normalizeOtlpBinaryId = (
+	value: string | null | undefined,
+	expectedBytes: 8 | 16,
+): string | null => {
+	if (!value) return null
+	const expectedHexLen = expectedBytes * 2
+	// Already valid lowercase hex of the expected length — fast path.
+	if (value.length === expectedHexLen && /^[0-9a-f]+$/.test(value)) return value
+	// Hex but mixed-case — normalize.
+	if (value.length === expectedHexLen && /^[0-9a-fA-F]+$/.test(value)) return value.toLowerCase()
+	// Try base64 (proto3-JSON default for bytes). Validate by round-trip:
+	// `Buffer.from` is lenient and will happily decode short human-readable
+	// IDs (e.g. "ai-stream-1") that merely happen to yield the expected byte
+	// length, which would silently rewrite — and even collide — distinct IDs.
+	// Re-encoding and comparing rejects anything that isn't canonical base64.
+	try {
+		const bytes = Buffer.from(value, "base64")
+		if (bytes.length === expectedBytes && bytes.toString("base64") === value) {
+			return bytes.toString("hex")
+		}
+	} catch {
+		// fall through
+	}
+	// Unknown shape — store as-is so we don't silently lose the row.
+	return value
+}
