@@ -154,8 +154,13 @@ export function StatusBadge({ status, isRunning }: { status: string; isRunning?:
 	)
 }
 
-export function LiveBadge() {
-	return <span className="px-1.5 py-0.5 rounded text-sm font-semibold bg-accent/15 text-accent">LIVE</span>
+export function LiveBadge({ pulse = false }: { pulse?: boolean }) {
+	return (
+		<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-sm font-semibold bg-accent/15 text-accent">
+			{pulse && <span className="size-1.5 rounded-full bg-accent animate-bar-pulse" />}
+			LIVE
+		</span>
+	)
 }
 
 /** Inline service name pill with deterministic color. */
