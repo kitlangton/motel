@@ -22,10 +22,14 @@ const parsedBaseUrl = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`)
 export const resolveOtelUrl = (path: string) => new URL(path.startsWith("/") ? path.slice(1) : path, parsedBaseUrl).toString()
 const serverPort = parsePositiveInt(process.env.MOTEL_OTEL_PORT, Number.parseInt(parsedBaseUrl.port || "80", 10))
 
+// Set only when MOTEL_OTEL_SERVICE_NAME was explicitly provided. The TUI uses
+// this to let an explicit request override the remembered last selection.
+export const explicitServiceName = process.env.MOTEL_OTEL_SERVICE_NAME?.trim() || null
+
 export const config = {
 	otel: {
 		enabled: parseBoolean(process.env.MOTEL_OTEL_ENABLED, false),
-		serviceName: process.env.MOTEL_OTEL_SERVICE_NAME?.trim() || "motel-otel-tui",
+		serviceName: explicitServiceName ?? "motel-otel-tui",
 		baseUrl,
 		host: process.env.MOTEL_OTEL_HOST?.trim() || parsedBaseUrl.hostname,
 		port: serverPort,

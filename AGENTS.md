@@ -132,7 +132,7 @@ The repo is wired up with `@effect/language-service` as a `tsconfig.json` `plugi
 
 ## Env Vars
 - `MOTEL_OTEL_ENABLED`: defaults to `false` (set to `true` to emit self-traces for debugging motel itself)
-- `MOTEL_OTEL_SERVICE_NAME`: defaults to `motel-otel-tui`
+- `MOTEL_OTEL_SERVICE_NAME`: defaults to `motel-otel-tui`; when set explicitly it also selects the TUI service filter, overriding the remembered last selection
 - `MOTEL_OTEL_BASE_URL`: defaults to `http://127.0.0.1:27686`
 - `MOTEL_OTEL_HOST`: defaults to `127.0.0.1`
 - `MOTEL_OTEL_PORT`: defaults to `27686`
