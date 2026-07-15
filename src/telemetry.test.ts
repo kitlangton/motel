@@ -182,12 +182,16 @@ describe("motel telemetry store", () => {
 									traceId: "trace-ai",
 									spanId: "ai-tool-1",
 									parentSpanId: "ai-stream-1",
-									name: "ai.toolCall",
+									name: "execute_tool bash",
 									kind: 1,
 									startTimeUnixNano: String(nowNanos + 25n * oneSecond),
 									endTimeUnixNano: String(nowNanos + 26n * oneSecond),
 									attributes: [
+										{ key: "ai.operationId", value: { stringValue: "ai.toolCall" } },
 										{ key: "ai.toolCall.name", value: { stringValue: "bash" } },
+										{ key: "gen_ai.operation.name", value: { stringValue: "execute_tool" } },
+										{ key: "gen_ai.conversation.id", value: { stringValue: "ses_genai_tool" } },
+										{ key: "gen_ai.tool.name", value: { stringValue: "bash" } },
 									],
 								},
 								{
@@ -210,6 +214,18 @@ describe("motel telemetry store", () => {
 										{ key: "ai.usage.inputTokens", value: { stringValue: "80" } },
 										{ key: "ai.usage.outputTokens", value: { stringValue: "10" } },
 										{ key: "ai.usage.totalTokens", value: { stringValue: "90" } },
+									],
+								},
+								{
+									traceId: "trace-ai",
+									spanId: "ai-tool-legacy",
+									parentSpanId: "ai-stream-2",
+									name: "ai.toolCall",
+									kind: 1,
+									startTimeUnixNano: String(nowNanos + 51n * oneSecond),
+									endTimeUnixNano: String(nowNanos + 52n * oneSecond),
+									attributes: [
+										{ key: "ai.toolCall.name", value: { stringValue: "legacy-tool" } },
 									],
 								},
 							],
@@ -848,7 +864,7 @@ describe("motel telemetry store", () => {
 			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
 		)
 
-		expect(result).toHaveLength(3) // ai.streamText, ai.toolCall, ai.generateText
+		expect(result).toHaveLength(4) // two AI roots, one GenAI tool, one legacy AI SDK tool
 		const streamCall = result.find((c) => c.spanId === "ai-stream-1")
 		expect(streamCall).toBeDefined()
 		expect(streamCall?.operation).toBe("streamText")
@@ -862,6 +878,18 @@ describe("motel telemetry store", () => {
 		expect(streamCall?.toolCallCount).toBe(1)
 		expect(streamCall?.usage?.inputTokens).toBe(150)
 		expect(streamCall?.usage?.outputTokens).toBe(42)
+	})
+
+	it("recognizes GenAI execute_tool spans and conversation IDs", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore, (store) =>
+				store.searchAiCalls({ sessionId: "ses_genai_tool" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]?.spanId).toBe("ai-tool-1")
+		expect(result[0]?.operation).toBe("execute_tool")
 	})
 
 	it("dedupes nested doStream spans from AI summaries", async () => {
@@ -969,6 +997,17 @@ describe("motel telemetry store", () => {
 		expect(result?.usage?.inputTokens).toBe(150)
 		expect(result?.timing.msToFirstChunk).toBe(500.5)
 		expect(result?.timing.msToFinish).toBe(20000)
+	})
+
+	it("gets GenAI tool call detail by its renamed span id", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore, (store) =>
+				store.getAiCall("ai-tool-1"),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result?.operation).toBe("execute_tool")
+		expect(result?.sessionId).toBe("ses_genai_tool")
 	})
 
 	it("returns null for non-AI span in getAiCall", async () => {

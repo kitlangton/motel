@@ -143,6 +143,9 @@ export const AI_ATTR_MAP = {
 	responseModel: "ai.response.model",
 	responseId: "ai.response.id",
 	responseTimestamp: "ai.response.timestamp",
+	genAiOperation: "gen_ai.operation.name",
+	genAiConversationId: "gen_ai.conversation.id",
+	genAiToolName: "gen_ai.tool.name",
 } as const
 
 /**

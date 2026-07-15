@@ -2117,8 +2117,9 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 		// AI Call queries
 		// ---------------------------------------------------------------------------
 
-		/** Extracts ai.streamText -> "streamText", ai.streamText.doStream -> "streamText" */
-		const parseAiOperation = (operationName: string): string => {
+		/** Extracts ai.streamText -> "streamText", or uses the GenAI semantic operation. */
+		const parseAiOperation = (operationName: string, genAiOperation?: string | null): string => {
+			if (genAiOperation) return genAiOperation
 			const parts = operationName.replace(/^ai\./, "").split(".")
 			return parts[0] ?? operationName
 		}
@@ -2126,8 +2127,22 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 		/** Builds WHERE clauses for AI call search against the spans table (aliased as s) */
 		const buildAiWhereClauses = (input: AiCallSearch | AiCallStatsSearch, cutoff: number) => {
 			const clauses: string[] = [
-				"s.operation_name LIKE 'ai.%'",
-				"s.operation_name NOT LIKE 'ai.%.do%'",
+				`(
+					(s.operation_name LIKE 'ai.%' AND s.operation_name NOT LIKE 'ai.%.do%')
+					OR EXISTS (
+						SELECT 1 FROM span_attributes genop
+						WHERE genop.trace_id = s.trace_id AND genop.span_id = s.span_id
+						AND genop.key = '${AI_ATTR_MAP.genAiOperation}'
+						AND (
+							genop.value = 'execute_tool'
+							OR NOT EXISTS (
+								SELECT 1 FROM span_attributes legacyop
+								WHERE legacyop.trace_id = s.trace_id AND legacyop.span_id = s.span_id
+								AND legacyop.key = '${AI_ATTR_MAP.operationId}'
+							)
+						)
+					)
+				)`,
 				"s.start_time_ms >= ?",
 			]
 			const params: Array<string | number> = [cutoff]
@@ -2149,13 +2164,27 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 				params.push(input.minDurationMs)
 			}
 			if (input.operation) {
-				clauses.push("s.operation_name LIKE ?")
-				params.push(`ai.${input.operation}%`)
+				clauses.push(`(
+					s.operation_name LIKE ?
+					OR EXISTS (
+						SELECT 1 FROM span_attributes opfilter
+						WHERE opfilter.trace_id = s.trace_id AND opfilter.span_id = s.span_id
+						AND opfilter.key = ? AND opfilter.value = ?
+					)
+				)`)
+				params.push(`ai.${input.operation}%`, AI_ATTR_MAP.genAiOperation, input.operation)
 			}
 
 			// Named attribute filters via span_attributes
 			const attrFilters: Array<[string, string]> = []
-			if (input.sessionId) attrFilters.push([AI_ATTR_MAP.sessionId, input.sessionId])
+			if (input.sessionId) {
+				clauses.push(`EXISTS (
+					SELECT 1 FROM span_attributes sessionattr
+					WHERE sessionattr.trace_id = s.trace_id AND sessionattr.span_id = s.span_id
+					AND sessionattr.key IN (?, ?) AND sessionattr.value = ?
+				)`)
+				params.push(AI_ATTR_MAP.sessionId, AI_ATTR_MAP.genAiConversationId, input.sessionId)
+			}
 			if (input.functionId) attrFilters.push([AI_ATTR_MAP.functionId, input.functionId])
 			if (input.provider) attrFilters.push([AI_ATTR_MAP.provider, input.provider])
 			if (input.model) attrFilters.push([AI_ATTR_MAP.model, input.model])
@@ -2245,6 +2274,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					AI_ATTR_MAP.inputTokens, AI_ATTR_MAP.outputTokens, AI_ATTR_MAP.totalTokens,
 					AI_ATTR_MAP.cachedInputTokens, AI_ATTR_MAP.reasoningTokens,
 					AI_ATTR_MAP.promptMessages, AI_ATTR_MAP.prompt, AI_ATTR_MAP.responseText,
+					AI_ATTR_MAP.genAiOperation, AI_ATTR_MAP.genAiConversationId,
 				]
 				const attrMap = loadSpanAttrValues(rows, summaryAttrKeys)
 
@@ -2255,7 +2285,14 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					SELECT parent_span_id, COUNT(*) AS cnt
 					FROM spans
 					WHERE (trace_id, parent_span_id) IN (VALUES ${spanPlaceholders})
-					AND operation_name LIKE 'ai.toolCall%'
+					AND (
+						operation_name LIKE 'ai.toolCall%'
+						OR EXISTS (
+							SELECT 1 FROM span_attributes toolop
+							WHERE toolop.trace_id = spans.trace_id AND toolop.span_id = spans.span_id
+							AND toolop.key = '${AI_ATTR_MAP.genAiOperation}' AND toolop.value = 'execute_tool'
+						)
+					)
 					GROUP BY trace_id, parent_span_id
 				`).all(...spanParams) as Array<{ parent_span_id: string; cnt: number }>
 				const toolCounts = new Map(toolCountRows.map((r) => [r.parent_span_id, r.cnt]))
@@ -2274,7 +2311,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					return {
 						traceId: row.trace_id,
 						spanId: row.span_id,
-						operation: parseAiOperation(row.operation_name),
+						operation: parseAiOperation(row.operation_name, get(AI_ATTR_MAP.genAiOperation)),
 						service: row.service_name,
 						functionId: get(AI_ATTR_MAP.functionId),
 						provider: get(AI_ATTR_MAP.provider),
@@ -2282,7 +2319,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 						status: row.status === "error" ? "error" : "ok",
 						startedAt: new Date(row.start_time_ms).toISOString(),
 						durationMs: row.duration_ms,
-						sessionId: get(AI_ATTR_MAP.sessionId),
+						sessionId: get(AI_ATTR_MAP.sessionId) ?? get(AI_ATTR_MAP.genAiConversationId),
 						userId: get(AI_ATTR_MAP.userId),
 						promptPreview: truncatePreview(promptContent),
 						responsePreview: truncatePreview(get(AI_ATTR_MAP.responseText)),
@@ -2303,7 +2340,16 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 		const getAiCall = Effect.fn("motel/TelemetryStore.getAiCall")(function* (spanId: string) {
 			return yield* Effect.sync(() => {
 				const row = db.query(`
-					SELECT * FROM spans WHERE span_id = ? AND operation_name LIKE 'ai.%' LIMIT 1
+					SELECT * FROM spans AS s
+					WHERE span_id = ? AND (
+						operation_name LIKE 'ai.%'
+						OR EXISTS (
+							SELECT 1 FROM span_attributes genop
+							WHERE genop.trace_id = s.trace_id AND genop.span_id = s.span_id
+							AND genop.key = '${AI_ATTR_MAP.genAiOperation}'
+						)
+					)
+					LIMIT 1
 				`).get(spanId) as SpanRow | null
 				if (!row) return null
 
@@ -2323,14 +2369,21 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 				const toolCallRows = db.query(`
 					SELECT span_id, operation_name, duration_ms, status, attributes_json
 					FROM spans
-					WHERE trace_id = ? AND parent_span_id = ? AND operation_name LIKE 'ai.toolCall%'
+					WHERE trace_id = ? AND parent_span_id = ? AND (
+						operation_name LIKE 'ai.toolCall%'
+						OR EXISTS (
+							SELECT 1 FROM span_attributes toolop
+							WHERE toolop.trace_id = spans.trace_id AND toolop.span_id = spans.span_id
+							AND toolop.key = '${AI_ATTR_MAP.genAiOperation}' AND toolop.value = 'execute_tool'
+						)
+					)
 					ORDER BY start_time_ms ASC
 				`).all(row.trace_id, row.span_id) as SpanRow[]
 
 				const toolCalls = toolCallRows.map((tc) => {
 					const tcAttrs = JSON.parse(tc.attributes_json) as Record<string, string>
 					return {
-						name: tcAttrs["ai.toolCall.name"] ?? tc.operation_name,
+						name: tcAttrs["ai.toolCall.name"] ?? tcAttrs[AI_ATTR_MAP.genAiToolName] ?? tc.operation_name,
 						spanId: tc.span_id,
 						status: tc.status === "error" ? "error" as const : "ok" as const,
 						durationMs: tc.duration_ms,
@@ -2367,7 +2420,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 				return {
 					traceId: row.trace_id,
 					spanId: row.span_id,
-					operation: parseAiOperation(row.operation_name),
+					operation: parseAiOperation(row.operation_name, get(AI_ATTR_MAP.genAiOperation)),
 					service: row.service_name,
 					functionId: get(AI_ATTR_MAP.functionId),
 					provider: get(AI_ATTR_MAP.provider),
@@ -2375,7 +2428,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					status: row.status === "error" ? "error" as const : "ok" as const,
 					startedAt: new Date(row.start_time_ms).toISOString(),
 					durationMs: row.duration_ms,
-					sessionId: get(AI_ATTR_MAP.sessionId),
+					sessionId: get(AI_ATTR_MAP.sessionId) ?? get(AI_ATTR_MAP.genAiConversationId),
 					userId: get(AI_ATTR_MAP.userId),
 					finishReason: get(AI_ATTR_MAP.finishReason),
 					promptMessages,
