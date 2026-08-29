@@ -1,5 +1,5 @@
 import * as Atom from "effect/unstable/reactivity/Atom"
-import { config } from "../config.ts"
+import { config, explicitServiceName } from "../config.ts"
 import type { LogItem, TraceItem, TraceSummaryItem } from "../domain.ts"
 import type { ThemeName } from "./theme.ts"
 import { readLastService, readLastTheme } from "./persistence.ts"
@@ -77,7 +77,7 @@ export const logStateAtom = Atom.make(initialLogState).pipe(Atom.keepAlive)
 export const serviceLogStateAtom = Atom.make(initialServiceLogState).pipe(Atom.keepAlive)
 export const selectedServiceLogIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
 export const selectedTraceIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
-export const selectedTraceServiceAtom = Atom.make<string | null>(readLastService() ?? config.otel.serviceName).pipe(Atom.keepAlive)
+export const selectedTraceServiceAtom = Atom.make<string | null>(explicitServiceName ?? readLastService() ?? config.otel.serviceName).pipe(Atom.keepAlive)
 export const refreshNonceAtom = Atom.make(0).pipe(Atom.keepAlive)
 export const noticeAtom = Atom.make<string | null>(null).pipe(Atom.keepAlive)
 export const selectedSpanIndexAtom = Atom.make<number | null>(null).pipe(Atom.keepAlive)
