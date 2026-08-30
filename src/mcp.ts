@@ -2,7 +2,7 @@
 import { BunRuntime, BunStdio } from "@effect/platform-bun"
 import { Effect, Layer, Logger, Schema } from "effect"
 import { MOTEL_VERSION } from "./registry.js"
-import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
+import { McpProtocol, McpServer, Tool, Toolkit } from "effect/unstable/ai"
 import { TraceSpanStatus } from "./domain.js"
 import { MotelClient, MotelClientLive } from "./motelClient.js"
 import { Locator, LocatorLive } from "./locator.js"
@@ -424,6 +424,12 @@ const ServerLayer = McpServer.toolkit(MotelToolkit).pipe(
 		McpServer.layerStdio({
 			name: "motel",
 			version: MOTEL_VERSION,
+			protocols: [
+				McpProtocol.v2025_11_25,
+				McpProtocol.v2025_06_18,
+				McpProtocol.v2025_03_26,
+				McpProtocol.v2024_11_05,
+			],
 		}),
 	),
 	Layer.provide(BunStdio.layer),
