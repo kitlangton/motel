@@ -109,7 +109,7 @@ describe("motel telemetry store", () => {
 									logRecords: [
 										{
 											timeUnixNano: String(nowNanos + 500_000_000n),
-											severityText: "INFO",
+											severityText: "Info",
 											traceId: "trace-1",
 											spanId: "child-1",
 											body: { stringValue: "tool call started" },
@@ -666,6 +666,18 @@ describe("motel telemetry store", () => {
 
 		expect(result).toHaveLength(1)
 		expect(result[0]?.severityText).toBe("ERROR")
+	})
+
+	it("filters logs by stored severity casing case-insensitively", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchLogs({ serviceName: "test-api", severity: "INFO" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]?.body).toBe("tool call started")
+		expect(result[0]?.severityText).toBe("Info")
 	})
 
 	it("searches log body case-insensitively", async () => {

@@ -1,12 +1,11 @@
-import { useMemo, useState } from "react"
-import { useParams, Link } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
+import { useParams, Link, useSearchParams } from "react-router-dom"
 import { useAtomValue } from "@effect/atom-react"
 
 import { MotelClient } from "../api"
 import {
 	PageContainer,
 	RefreshButton,
-	SeverityBadge,
 	LiveBadge,
 	TabButton,
 	LoadingState,
@@ -16,12 +15,17 @@ import {
 import { formatDuration, formatTimestamp, serviceColor } from "../format"
 import { Waterfall } from "../components/Waterfall"
 import { SpanDetailPanel } from "../components/SpanDetail"
+import { LogTable } from "../components/LogTable"
 
 export function TraceDetailPage() {
 	const { traceId = "" } = useParams<{ traceId: string }>()
+	const [searchParams, setSearchParams] = useSearchParams()
 
-	const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null)
-	const [activeTab, setActiveTab] = useState<"waterfall" | "logs">("waterfall")
+	const spanParam = searchParams.get("span")
+	const logParam = searchParams.get("log")
+	const tabParam = searchParams.get("tab")
+	const [selectedSpanId, setSelectedSpanId] = useState<string | null>(spanParam)
+	const [activeTab, setActiveTab] = useState<"waterfall" | "logs">(tabParam === "logs" || logParam ? "logs" : "waterfall")
 
 	const traceAtom = useMemo(
 		() => MotelClient.query("telemetry", "trace", { params: { traceId } }),
@@ -34,6 +38,48 @@ export function TraceDetailPage() {
 
 	const traceResult: any = useAtomValue(traceAtom)
 	const logsResult: any = useAtomValue(logsAtom)
+
+	useEffect(() => {
+		setSelectedSpanId(spanParam)
+	}, [spanParam])
+
+	useEffect(() => {
+		setActiveTab(tabParam === "logs" || logParam ? "logs" : "waterfall")
+	}, [tabParam, logParam])
+
+	const selectSpan = (spanId: string | null) => {
+		setSelectedSpanId(spanId)
+		const p = new URLSearchParams(searchParams)
+		spanId ? p.set("span", spanId) : p.delete("span")
+		p.delete("log")
+		if (activeTab === "logs") p.set("tab", "logs")
+		else p.delete("tab")
+		setSearchParams(p, { replace: true })
+	}
+
+	const selectTab = (tab: "waterfall" | "logs") => {
+		setActiveTab(tab)
+		const p = new URLSearchParams(searchParams)
+		tab === "logs" ? p.set("tab", "logs") : p.delete("tab")
+		if (tab === "waterfall") p.delete("log")
+		setSearchParams(p, { replace: true })
+	}
+
+	const openLogDetail = (log: { id: string; spanId: string | null }) => {
+		if (log.spanId) setSelectedSpanId(log.spanId)
+		setActiveTab("logs")
+		const p = new URLSearchParams(searchParams)
+		p.set("tab", "logs")
+		p.set("log", log.id)
+		if (log.spanId) p.set("span", log.spanId)
+		setSearchParams(p, { replace: true })
+	}
+
+	const closeLogDetail = () => {
+		const p = new URLSearchParams(searchParams)
+		p.delete("log")
+		setSearchParams(p, { replace: true })
+	}
 
 	if (!traceId) return <EmptyState title="No trace ID" />
 	if (traceResult._tag !== "Success") {
@@ -91,39 +137,52 @@ export function TraceDetailPage() {
 
 			{/* Tabs */}
 			<PageContainer className="flex gap-1 py-2 border-b border-white/5">
-				<TabButton active={activeTab === "waterfall"} onClick={() => setActiveTab("waterfall")}>Waterfall</TabButton>
-				<TabButton active={activeTab === "logs"} onClick={() => setActiveTab("logs")}>Logs ({logs.length})</TabButton>
+				<TabButton active={activeTab === "waterfall"} onClick={() => selectTab("waterfall")}>Waterfall</TabButton>
+				<TabButton active={activeTab === "logs"} onClick={() => selectTab("logs")}>Logs ({logs.length})</TabButton>
 			</PageContainer>
 
-			{/* Body — full page width for the waterfall */}
-			<div className="flex flex-1 overflow-hidden w-full">
+			{/* Body */}
+			<div className="flex flex-1 overflow-hidden w-full min-h-0">
 				{activeTab === "waterfall" ? (
-					<>
+					<div className="flex flex-col flex-1 min-w-0 min-h-0">
 						<Waterfall
 							spans={trace.spans}
 							traceStartMs={trace.startedAt.getTime()}
 							traceDurationMs={trace.durationMs}
 							selectedSpanId={selectedSpanId}
-							onSelectSpan={setSelectedSpanId}
+							onSelectSpan={selectSpan}
 							logs={logs as any}
 						/>
 						{selectedSpan && (
 							<SpanDetailPanel
 								span={selectedSpan}
 								logs={selectedSpanLogs}
-								onClose={() => setSelectedSpanId(null)}
+								onOpenLog={openLogDetail}
+								onClose={() => selectSpan(null)}
 							/>
 						)}
-					</>
+					</div>
 				) : (
-					<TraceLogsView logs={logs} onSelectSpan={setSelectedSpanId} />
+					<TraceLogsView logs={logs} selectedLogId={logParam} onSelectSpan={selectSpan} onOpenLog={openLogDetail} onCloseLog={closeLogDetail} />
 				)}
 			</div>
 		</div>
 	)
 }
 
-function TraceLogsView({ logs, onSelectSpan }: { logs: any[]; onSelectSpan: (id: string | null) => void }) {
+function TraceLogsView({
+	logs,
+	selectedLogId,
+	onSelectSpan,
+	onOpenLog,
+	onCloseLog,
+}: {
+	logs: any[]
+	selectedLogId: string | null
+	onSelectSpan: (id: string | null) => void
+	onOpenLog: (log: any) => void
+	onCloseLog: () => void
+}) {
 	if (logs.length === 0) {
 		return (
 			<div className="flex-1">
@@ -133,29 +192,18 @@ function TraceLogsView({ logs, onSelectSpan }: { logs: any[]; onSelectSpan: (id:
 	}
 
 	return (
-		<div className="flex-1 overflow-auto">
-			<table className="w-full">
-				<thead>
-					<tr className="text-left text-sm text-zinc-500 sticky top-0 bg-zinc-950">
-						<th className="whitespace-nowrap pb-2 pt-3 pl-6 pr-4 font-medium w-[7rem]">Time</th>
-						<th className="whitespace-nowrap pb-2 pt-3 px-4 font-medium w-16">Level</th>
-						<th className="whitespace-nowrap pb-2 pt-3 pl-4 pr-6 font-medium">Body</th>
-					</tr>
-				</thead>
-				<tbody>
-					{logs.map((log) => (
-						<tr
-							key={log.id}
-							className={`border-t border-white/5 ${log.spanId ? "cursor-pointer hover:bg-white/[0.03]" : ""}`}
-							onClick={() => log.spanId && onSelectSpan(log.spanId)}
-						>
-							<td className="py-1.5 pl-6 pr-4 text-sm tabular-nums text-zinc-500 align-top">{formatTimestamp(log.timestamp)}</td>
-							<td className="py-1.5 px-4 align-top"><SeverityBadge severity={log.severityText} /></td>
-							<td className="py-1.5 pl-4 pr-6 text-sm whitespace-pre-wrap break-words text-zinc-300">{log.body}</td>
-						</tr>
-					))}
-				</tbody>
-			</table>
-		</div>
+		<LogTable
+			logs={logs}
+			traceScoped
+			onSelectSpan={onSelectSpan}
+			className="flex-1"
+			initialExpandedId={logs[0]?.id ?? null}
+			expandedId={selectedLogId}
+			onExpandedIdChange={(id) => {
+				const log = id ? logs.find((item) => item.id === id) : null
+				if (log) onOpenLog(log)
+				else onCloseLog()
+			}}
+		/>
 	)
 }

@@ -135,8 +135,9 @@ const SEVERITY_STYLES: Record<string, string> = {
 }
 
 export function SeverityBadge({ severity }: { severity: string }) {
-	const cls = SEVERITY_STYLES[severity] ?? "text-zinc-500 bg-zinc-500/10"
-	return <span className={`inline-block px-1.5 py-0.5 rounded text-sm font-medium ${cls}`}>{severity}</span>
+	const normalizedSeverity = severity.toUpperCase()
+	const cls = SEVERITY_STYLES[normalizedSeverity] ?? "text-zinc-500 bg-zinc-500/10"
+	return <span className={`inline-block px-1.5 py-0.5 rounded text-sm font-medium ${cls}`}>{normalizedSeverity}</span>
 }
 
 export function StatusBadge({ status, isRunning }: { status: string; isRunning?: boolean }) {
