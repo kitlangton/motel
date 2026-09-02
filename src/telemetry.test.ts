@@ -668,6 +668,81 @@ describe("motel telemetry store", () => {
 		expect(result[0]?.severityText).toBe("ERROR")
 	})
 
+	describe("mixed-case stored log severities", () => {
+		const serviceName = "severity-case-test"
+		const severities = ["Info", "INFO", "info", "Error"]
+
+		beforeAll(async () => {
+			await storeRuntime.runPromise(Effect.flatMap(TelemetryStore, (store) =>
+				store.ingestLogs({
+					resourceLogs: [{
+						resource: { attributes: [{ key: "service.name", value: { stringValue: serviceName } }] },
+						scopeLogs: [{ logRecords: severities.map((severityText, index) => ({
+							timeUnixNano: String(BigInt(Date.now()) * 1_000_000n),
+							severityText,
+							body: { stringValue: `severity-case-${index}` },
+							attributes: [{ key: "batch", value: { stringValue: index < 2 ? "included" : "excluded" } }],
+						})) }],
+					}],
+				}),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")))
+		})
+
+		for (const severity of ["INFO", "Info", "info"]) {
+			it(`filters ${severity} without changing returned severity text`, async () => {
+				const logs = await storeRuntime.runPromise(Effect.flatMap(TelemetryStore, (store) =>
+					store.searchLogs({ serviceName, severity }),
+				))
+				expect(logs.map((log) => log.severityText).sort()).toEqual(["INFO", "Info", "info"])
+			})
+		}
+
+		it("groups severity variants in SQL stats", async () => {
+			const stats = await storeRuntime.runPromise(Effect.flatMap(TelemetryStore, (store) =>
+				store.logStats({ serviceName, groupBy: "severity", agg: "count" }),
+			))
+			expect(stats).toEqual([
+				{ group: "INFO", value: 3, count: 3 },
+				{ group: "ERROR", value: 1, count: 1 },
+			])
+		})
+
+		it("groups severity variants in attribute-filtered stats", async () => {
+			const stats = await storeRuntime.runPromise(Effect.flatMap(TelemetryStore, (store) =>
+				store.logStats({ serviceName, groupBy: "severity", agg: "count", attributeFilters: { batch: "included" } }),
+			))
+			expect(stats).toEqual([{ group: "INFO", value: 2, count: 2 }])
+		})
+
+		it("indexes case-insensitive severity searches", () => {
+			const probe = new Database(dbPath, { readonly: true })
+			try {
+				const plan = probe.query<{ detail: string }, [string, number, number]>(`
+					EXPLAIN QUERY PLAN SELECT * FROM logs
+					WHERE severity_text = ? COLLATE NOCASE AND timestamp_ms >= ?
+					ORDER BY timestamp_ms DESC, id DESC LIMIT ?
+				`).all("INFO", 0, 80)
+				expect(plan.some((row) => row.detail.includes("idx_logs_severity_nocase_time (severity_text=?"))).toBe(true)
+			} finally {
+				probe.close()
+			}
+		})
+
+		it("groups severity facets without changing persisted text", async () => {
+			const facets = await storeRuntime.runPromise(Effect.flatMap(TelemetryStore, (store) =>
+				store.listFacets({ serviceName, type: "logs", field: "severity" }),
+			))
+			expect(facets).toEqual([{ value: "INFO", count: 3 }, { value: "ERROR", count: 1 }])
+			const probe = new Database(dbPath, { readonly: true })
+			try {
+				expect(probe.query("SELECT severity_text FROM logs WHERE service_name = ? ORDER BY id").all(serviceName))
+					.toEqual(severities.map((severity_text) => ({ severity_text })))
+			} finally {
+				probe.close()
+			}
+		})
+	})
+
 	it("searches log body case-insensitively", async () => {
 		const result = await storeRuntime.runPromise(
 			Effect.flatMap(TelemetryStore, (store) =>
