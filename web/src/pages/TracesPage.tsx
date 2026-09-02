@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import type { AsyncResult } from "effect/unstable/reactivity"
 import { MotelClient } from "../api"
 import { PageHeader, RefreshButton, LiveBadge, LoadingState, ErrorState, EmptyState } from "../components/shared"
+import { useLivePolling } from "../useLivePolling"
 import { formatDuration, formatRelativeTime, serviceColor } from "../format"
 
 export function TracesPage() {
@@ -18,9 +19,21 @@ export function TracesPage() {
 		[service],
 	)
 
+	// Poll the list while visible so new traces (and running ones) surface without
+	// a reload — same decaying policy as the detail page.
+	const result: any = useAtomValue(tracesAtom)
+	const traces = result._tag === "Success" ? result.value.data : []
+	const isLive = useLivePolling({
+		atom: tracesAtom,
+		fingerprint: traces.length,
+		running: traces.some((t: any) => t.isRunning),
+		pending: traces.length === 0,
+	})
+
 	return (
 		<div className="flex flex-col h-full">
 			<PageHeader title={service ? `Traces / ${service}` : "Traces"}>
+				{isLive && <LiveBadge pulse />}
 				<Suspense fallback={null}>
 					<RefreshButton atom={tracesAtom} />
 				</Suspense>

@@ -13,8 +13,6 @@ import { MOTEL_SERVICE_ID, MOTEL_VERSION, processIdentity, removeRegistryEntry, 
 import { AsyncIngest, AsyncIngestLive } from "./services/AsyncIngest.js"
 import { TelemetryStoreReadonly } from "./services/TelemetryStore.js"
 import { TelemetryQueryLive } from "./services/TelemetryQuery.js"
-import type { LogItem, TraceItem } from "./domain.js"
-import { lifecycleLabel } from "./ui/format.js"
 import { decodeProtobufLogs, decodeProtobufTraces } from "./otlpProtobuf.js"
 import type { OtlpLogExportRequest, OtlpTraceExportRequest } from "./otlp.js"
 
@@ -29,7 +27,6 @@ const parseListParams = (request: { readonly url: string }, bounds: ListBounds) 
 
 const jsonResponse = (value: unknown, status = 200) => HttpServerResponse.jsonUnsafe(value, { status })
 const textResponse = (value: string) => HttpServerResponse.text(value)
-const htmlResponse = (value: string) => HttpServerResponse.html(value)
 const notFoundResponse = (message = "Not found") => jsonResponse({ error: message }, 404)
 const healthPayload = () => ({
 	ok: true,
@@ -106,87 +103,13 @@ const handleLogSearch = (request: { readonly url: string }) =>
 		}))
 	}))
 
-const escapeHtml = (value: string) =>
-	value
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-
-const renderTracePage = (trace: TraceItem, logs: readonly LogItem[]) => {
-	const logCountsBySpan = new Map<string, number>()
-	for (const log of logs) {
-		if (!log.spanId) continue
-		logCountsBySpan.set(log.spanId, (logCountsBySpan.get(log.spanId) ?? 0) + 1)
-	}
-
-	const spansHtml = trace.spans
-		.map((span) => {
-			const indent = Math.min(span.depth * 20, 120)
-			const count = logCountsBySpan.get(span.spanId) ?? 0
-			return `<tr>
-<td style="padding-left:${indent}px">${escapeHtml(span.operationName)}</td>
-<td>${escapeHtml(span.serviceName)}</td>
-<td>${lifecycleLabel(span)}</td>
-<td>${escapeHtml(span.status)}</td>
-<td>${span.durationMs.toFixed(2)}ms</td>
-<td>${count}</td>
-</tr>`
-		})
-		.join("\n")
-
-	const logsHtml = logs
-		.slice(0, 80)
-		.map(
-			(log) => `<tr>
-<td>${escapeHtml(log.timestamp.toISOString())}</td>
-<td>${escapeHtml(log.severityText)}</td>
-<td>${escapeHtml(log.scopeName ?? log.serviceName)}</td>
-<td><pre>${escapeHtml(log.body)}</pre></td>
-</tr>`,
-		)
-		.join("\n")
-
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(trace.rootOperationName)}</title>
-<style>
-body { background:#0b0b0b; color:#ede7da; font-family: ui-monospace, SFMono-Regular, monospace; margin:24px; }
-h1,h2 { color:#f4a51c; }
-.muted { color:#9f9788; }
-table { width:100%; border-collapse: collapse; margin-top:16px; }
-th, td { border-bottom:1px solid #2a2520; padding:8px; text-align:left; vertical-align:top; }
-pre { white-space:pre-wrap; margin:0; color:#ede7da; }
-</style>
-</head>
-<body>
-<h1>${escapeHtml(trace.rootOperationName)}</h1>
-<p class="muted">${escapeHtml(trace.serviceName)} · ${lifecycleLabel(trace)} · ${trace.durationMs.toFixed(2)}ms · ${trace.spanCount} spans · ${logs.length} logs</p>
-<p class="muted">${escapeHtml(trace.traceId)}</p>
-<h2>Spans</h2>
-<table>
-<thead><tr><th>Operation</th><th>Service</th><th>State</th><th>Status</th><th>Duration</th><th>Logs</th></tr></thead>
-<tbody>${spansHtml}</tbody>
-</table>
-<h2>Logs</h2>
-<table>
-<thead><tr><th>Time</th><th>Level</th><th>Scope</th><th>Body</th></tr></thead>
-<tbody>${logsHtml}</tbody>
-</table>
-</body>
-</html>`
-}
-
 const TelemetryGroupLive = HttpApiBuilder.group(
 	MotelHttpApi,
 	"telemetry",
 	(handlers) =>
 		handlers
 			.handleRaw("root", () =>
-				Effect.succeed(textResponse("motel local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/ai/calls\nGET /api/ai/calls/<span-id>\nGET /api/ai/stats\nGET /api/facets?type=logs&field=severity\nGET /api/docs\nGET /api/docs/<name>\nGET /openapi.json\nGET /docs\nGET /trace/<trace-id>\n")),
+				Effect.succeed(textResponse("motel local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/ai/calls\nGET /api/ai/calls/<span-id>\nGET /api/ai/stats\nGET /api/facets?type=logs&field=severity\nGET /api/docs\nGET /api/docs/<name>\nGET /openapi.json\nGET /docs\n")),
 			)
 			.handle("health", () =>
 				HttpMiddleware.withLoggerDisabled(Effect.succeed(healthPayload())),
@@ -460,15 +383,6 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					)
 					return jsonResponse({ data })
 				})),
-			)
-			.handleRaw("tracePage", ({ params }) =>
-				respondRaw(
-					Effect.flatMap(withRead((store) => store.getTrace(params.traceId)), (trace) =>
-						trace
-							? Effect.map(withRead((store) => store.listTraceLogs(params.traceId)), (logs) => htmlResponse(renderTracePage(trace, logs)))
-							: Effect.succeed(notFoundResponse("Trace not found")),
-					),
-				),
 			),
 )
 

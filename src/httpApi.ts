@@ -37,7 +37,6 @@ const DocIndex = Schema.Struct({
 	})),
 }).annotate({ identifier: "DocIndex" })
 const PlainText = Schema.String.pipe(HttpApiSchema.asText())
-const HtmlText = Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" }))
 const TraceSummaryList = Schema.Struct({ data: Schema.Array(TraceSummaryItem), meta: Meta })
 const SpanResponse = Schema.Struct({ data: SpanItem })
 const SpanList = Schema.Struct({ data: Schema.Array(SpanItem) })
@@ -160,16 +159,6 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 				})
 					.annotate(OpenApi.Summary, "Get a single trace")
 					.annotate(OpenApi.Description, "Returns the full trace with all spans ordered by parent-child hierarchy. Returns 404 if the trace ID is not found or has expired."),
-
-				HttpApiEndpoint.get("tracePage", "/trace/:traceId", {
-					params: {
-						traceId: Schema.String.pipe(Schema.annotateKey({ description: "Full 32-character hex trace ID" })),
-					},
-					success: HtmlText,
-					error: ErrorResponse,
-				})
-					.annotate(OpenApi.Summary, "Render a browser trace page")
-					.annotate(OpenApi.Description, "Renders a simple HTML waterfall/log view for one trace, suitable for opening from the TUI or browser."),
 
 				HttpApiEndpoint.get("traceLogs", "/api/traces/:traceId/logs", {
 					params: {
