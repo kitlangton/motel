@@ -27,7 +27,7 @@ export const makeSpan = (overrides: Partial<TraceSpanItem> = {}): TraceSpanItem 
 	depth: 0,
 	tags: {
 		"ai.operationId": "ai.streamText",
-		"ai.model.id": "claude-opus-4-7",
+		"ai.model.id": "example-chat-model",
 		"ai.model.provider": "anthropic",
 		"ai.prompt.messages": "[]",
 	},
@@ -43,7 +43,7 @@ export const makeDetail = (overrides: Partial<AiCallDetail> = {}): AiCallDetail 
 	service: "storybook",
 	functionId: "story.demo",
 	provider: "anthropic",
-	model: "claude-opus-4-7",
+	model: "example-chat-model",
 	status: "ok",
 	startedAt: new Date().toISOString(),
 	durationMs: 2400,
