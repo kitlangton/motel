@@ -614,6 +614,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					CREATE INDEX IF NOT EXISTS idx_logs_trace_time ON logs(trace_id, timestamp_ms DESC);
 					CREATE INDEX IF NOT EXISTS idx_logs_span_time ON logs(span_id, timestamp_ms DESC);
 					CREATE INDEX IF NOT EXISTS idx_logs_severity_time ON logs(severity_text, timestamp_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_logs_severity_nocase_time ON logs(severity_text COLLATE NOCASE, timestamp_ms DESC);
 
 					CREATE TABLE IF NOT EXISTS trace_summaries (
 						trace_id TEXT PRIMARY KEY,
@@ -1673,7 +1674,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					params.push(input.serviceName)
 				}
 				if (input.severity) {
-					clauses.push(`severity_text = ?`)
+					clauses.push(`severity_text = ? COLLATE NOCASE`)
 					params.push(input.severity.toUpperCase())
 				}
 				if (input.traceId) {
@@ -1886,7 +1887,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					const group = input.groupBy === "service"
 						? log.serviceName
 						: input.groupBy === "severity"
-							? log.severityText
+							? log.severityText.toUpperCase()
 							: input.groupBy === "scope"
 								? log.scopeName ?? "unknown"
 								: isAttrGroupBy
@@ -1932,7 +1933,7 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 				const groupExpr = input.groupBy === "service"
 					? "service_name"
 					: input.groupBy === "severity"
-						? "severity_text"
+						? "UPPER(severity_text)"
 						: input.groupBy === "scope"
 							? "COALESCE(scope_name, 'unknown')"
 							: "'unknown'"
@@ -1976,11 +1977,11 @@ const makeTelemetryStoreEffect = (opts: TelemetryStoreOptions) =>
 					}
 					if (input.field === "severity") {
 						const rows = db.query(`
-							SELECT severity_text AS value, COUNT(*) AS count
+							SELECT UPPER(severity_text) AS value, COUNT(*) AS count
 							FROM logs
 							WHERE timestamp_ms >= ?
 							${input.serviceName ? "AND service_name = ?" : ""}
-							GROUP BY severity_text
+							GROUP BY value
 							ORDER BY count DESC, value ASC
 							LIMIT ?
 						`).all(...(input.serviceName ? [cutoff, input.serviceName, limit] : [cutoff, limit])) as Array<{ value: string; count: number }>
