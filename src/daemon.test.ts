@@ -259,7 +259,8 @@ describe("daemon manager", () => {
 		expect(restarted.running).toBe(true)
 	}, 20_000)
 
-	test("force-kills an identity-verified daemon that ignores graceful shutdown", async () => {
+	// Windows has no SIGSTOP, so there is no way to freeze the daemon into ignoring SIGTERM.
+	test.skipIf(process.platform === "win32")("force-kills an identity-verified daemon that ignores graceful shutdown", async () => {
 		const harness = makeHarness({ gracefulStopTimeoutMs: 250, forceStopTimeoutMs: 1_000 })
 		activeHarnesses.push(harness)
 		const started = await Effect.runPromise(harness.manager.ensure)
