@@ -20,7 +20,7 @@ describe("initial TUI service selection", () => {
 
 					// Fresh processes exercise import-time config and persistence without module-cache leakage.
 					const result = Bun.spawnSync([process.execPath, "--no-env-file", "--eval", `
-						import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry"
+						import * as AtomRegistry from "effect/reactivity/AtomRegistry"
 						import { config } from "./src/config.ts"
 						import { selectedTraceServiceAtom } from "./src/ui/atoms.ts"
 						const registry = AtomRegistry.make()

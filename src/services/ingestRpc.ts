@@ -8,7 +8,7 @@
  * seconds at a time. Read-only TelemetryStore methods use the separate
  * query RPC worker so no synchronous SQLite call runs on the HTTP thread.
  *
- * Payloads are typed as Schema.Unknown because OTLP's protobuf-JSON
+ * Payloads are typed as StructuredClone (a pass-through) because OTLP's protobuf-JSON
  * shape is enormous and nested — the store validates structurally
  * during the actual insert loop, and serialising a schema through
  * the worker boundary would add overhead that beats the purpose of
@@ -18,21 +18,22 @@
  */
 
 import { Schema } from "effect"
-import * as Rpc from "effect/unstable/rpc/Rpc"
-import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
+import * as Rpc from "effect/rpc/Rpc"
+import * as RpcGroup from "effect/rpc/RpcGroup"
+import { StructuredClone } from "./rpcSchema.js"
 
-export class IngestError extends Schema.TaggedErrorClass<IngestError>()("IngestError", {
+export class IngestError extends Schema.TaggedError<IngestError>()("IngestError", {
 	message: Schema.String,
 }) {}
 
 export const IngestRpcs = RpcGroup.make(
 	Rpc.make("ingestTraces", {
-		payload: { payload: Schema.Unknown },
+		payload: { payload: StructuredClone },
 		success: Schema.Struct({ insertedSpans: Schema.Number }),
 		error: IngestError,
 	}),
 	Rpc.make("ingestLogs", {
-		payload: { payload: Schema.Unknown },
+		payload: { payload: StructuredClone },
 		success: Schema.Struct({ insertedLogs: Schema.Number }),
 		error: IngestError,
 	}),

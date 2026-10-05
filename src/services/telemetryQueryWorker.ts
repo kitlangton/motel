@@ -1,8 +1,7 @@
 import { BunRuntime } from "@effect/platform-bun"
 import * as BunWorkerRunner from "@effect/platform-bun/BunWorkerRunner"
 import { Effect, Layer } from "effect"
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
-import * as RpcServer from "effect/unstable/rpc/RpcServer"
+import * as RpcServer from "effect/rpc/RpcServer"
 import { TelemetryStoreQueryWorkerLive, TelemetryStoreReadonly, type TelemetryStoreReader } from "./TelemetryStore.js"
 import { QueryError, QueryRpcs } from "./queryRpc.js"
 
@@ -25,7 +24,6 @@ const WorkerLive = RpcServer.layer(QueryRpcs).pipe(
 	Layer.provide(QueryHandlers),
 	Layer.provide(TelemetryStoreQueryWorkerLive),
 	Layer.provide(RpcServer.layerProtocolWorkerRunner),
-	Layer.provide(RpcSerialization.layerMsgPack),
 	Layer.provide(BunWorkerRunner.layer),
 )
 

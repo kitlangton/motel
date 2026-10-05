@@ -1,15 +1,16 @@
 import { Schema } from "effect"
-import * as Rpc from "effect/unstable/rpc/Rpc"
-import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
+import * as Rpc from "effect/rpc/Rpc"
+import * as RpcGroup from "effect/rpc/RpcGroup"
+import { StructuredClone } from "./rpcSchema.js"
 
-export class QueryError extends Schema.TaggedErrorClass<QueryError>()("QueryError", {
+export class QueryError extends Schema.TaggedError<QueryError>()("QueryError", {
 	message: Schema.String,
 }) {}
 
 export const QueryRpcs = RpcGroup.make(
 	Rpc.make("query", {
-		payload: { method: Schema.String, args: Schema.Array(Schema.Unknown) },
-		success: Schema.Unknown,
+		payload: { method: Schema.String, args: Schema.Array(StructuredClone) },
+		success: StructuredClone,
 		error: QueryError,
 	}),
 )

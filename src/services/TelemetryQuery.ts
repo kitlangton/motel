@@ -1,18 +1,16 @@
 import * as BunWorker from "@effect/platform-bun/BunWorker"
 import { Duration, Effect, Exit, Layer, Scope } from "effect"
-import * as RpcClient from "effect/unstable/rpc/RpcClient"
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
-import type { WorkerError } from "effect/unstable/workers/WorkerError"
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import * as RpcClient from "effect/rpc/RpcClient"
+import type { WorkerError } from "effect/workers/WorkerError"
+import type { RpcClientError } from "effect/rpc/RpcClientError"
 import { TelemetryStoreReadonly, type TelemetryStoreReader } from "./TelemetryStore.js"
 import { QueryRpcs } from "./queryRpc.js"
 
 type QueryMethod = keyof TelemetryStoreReader
 type QueryClient = RpcClient.FromGroup<typeof QueryRpcs, RpcClientError | WorkerError>
-type QueryClientEntry = { readonly client: QueryClient; readonly clientScope: Scope.Scope }
+type QueryClientEntry = { readonly client: QueryClient; readonly clientScope: Scope.Closeable }
 
 const WorkerProtocol = RpcClient.layerProtocolWorker({ size: 1 }).pipe(
-	Layer.provide(RpcSerialization.layerMsgPack),
 	Layer.provide(BunWorker.layer(() => new Worker(new URL("./telemetryQueryWorker.ts", import.meta.url)))),
 )
 
