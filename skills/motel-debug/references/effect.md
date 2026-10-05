@@ -6,7 +6,7 @@ Apply these only when the target repo already uses Effect or `@effect/*`.
 
 - Inspect the existing runtime and observability wiring before adding anything new.
 - Prefer the repo's existing Effect-native observability APIs if they already exist.
-- If `effect/unstable/observability` is already the best fit, prefer it over adding new OTEL packages.
+- If `effect/observability` is already the best fit, prefer it over adding new OTEL packages.
 - Merge telemetry into the main runtime once, not per feature or per request path.
 
 ## Instrumentation

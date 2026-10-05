@@ -1,6 +1,6 @@
 import { Layer } from "effect"
-import { FetchHttpClient } from "effect/unstable/http"
-import { AtomHttpApi } from "effect/unstable/reactivity"
+import { FetchHttpClient } from "effect/http"
+import { AtomHttpApi } from "effect/reactivity"
 import { MotelHttpApi } from "@motel/httpApi"
 
 export const MotelClient = AtomHttpApi.Service()("MotelClient", {

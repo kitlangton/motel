@@ -119,7 +119,7 @@ The repo is wired up with `@effect/language-service` as a `tsconfig.json` `plugi
 ## Effect Observability Guidance
 - Inspect the target repo’s existing Effect runtime and observability wiring before adding anything new.
 - Prefer the repo’s existing Effect-native observability APIs if available.
-- If `effect/unstable/observability` is already the best fit, prefer it over adding `@effect/opentelemetry`.
+- If `effect/observability` is already the best fit, prefer it over adding `@effect/opentelemetry`.
 - Only add new OpenTelemetry SDK packages when the repo already uses them or they are clearly required.
 - Merge telemetry into the main runtime once, not per-feature.
 - Prefer structured log annotations so fields like `sessionID`, `modelID`, `providerID`, and `tool` are queryable.

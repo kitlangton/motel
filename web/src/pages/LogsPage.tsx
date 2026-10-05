@@ -1,7 +1,7 @@
 import { useMemo, useState, Suspense } from "react"
 import { useSearchParams, Link } from "react-router-dom"
 import { useAtomValue } from "@effect/atom-react"
-import type { AsyncResult } from "effect/unstable/reactivity"
+import type { AsyncResult } from "effect/reactivity"
 import { MotelClient } from "../api"
 import {
 	PageContainer,

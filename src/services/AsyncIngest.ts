@@ -21,10 +21,9 @@
 
 import * as BunWorker from "@effect/platform-bun/BunWorker"
 import { Context, Duration, Effect, Exit, Layer, Scope } from "effect"
-import * as RpcClient from "effect/unstable/rpc/RpcClient"
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
-import type { WorkerError } from "effect/unstable/workers/WorkerError"
+import * as RpcClient from "effect/rpc/RpcClient"
+import type { RpcClientError } from "effect/rpc/RpcClientError"
+import type { WorkerError } from "effect/workers/WorkerError"
 import { IngestRpcs } from "./ingestRpc.ts"
 
 // RpcClient.make always surfaces RpcClientError in addition to the
@@ -38,10 +37,9 @@ export class AsyncIngest extends Context.Service<
 >()("@motel/AsyncIngest") {}
 
 // Protocol: RpcClient.layerProtocolWorker manages a worker pool and
-// speaks msgpack over structured-clone messages. `size: 1` matches
+// speaks over structured-clone messages. `size: 1` matches
 // SQLite's single-writer constraint.
 const WorkerProtocol = RpcClient.layerProtocolWorker({ size: 1 }).pipe(
-	Layer.provide(RpcSerialization.layerMsgPack),
 	Layer.provide(
 		BunWorker.layer(() => new Worker(new URL("./telemetryWorker.ts", import.meta.url))),
 	),
