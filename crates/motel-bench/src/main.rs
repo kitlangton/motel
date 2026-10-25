@@ -43,7 +43,7 @@ const STMTS: [&str; 3] = [
 const NSESS: u32 = 2000;
 const SEARCH_NEEDLE: &str = "display link";
 
-/// Seeded LCG matching `spikes/gen.ts` (`s = (s * 1664525 + 1013904223) >>> 0`).
+/// Seeded LCG (`s = (s * 1664525 + 1013904223) >>> 0`, `docs/engine.md` §8).
 struct Rng {
     state: u32,
 }
@@ -103,7 +103,7 @@ struct TraceCtx {
     request_id: Option<String>,
 }
 
-/// Deterministic fixture generator ported from `spikes/gen.ts` + `engine.md` §8:
+/// Deterministic fixture generator specified in `docs/engine.md` §8:
 /// - seed 12345
 /// - half spans and half logs in 500-row batches
 /// - 5 services, 10 spans per trace, 2,000 sessions
@@ -246,7 +246,7 @@ impl FixtureGenerator {
 
                 out.push(Event {
                     ts,
-                    ingest_ts: Some(ts),
+                    ingest_ts: None,
                     dur: Some(dur_ms * 1_000_000),
                     kind: EventKind::Span,
                     service,
@@ -313,7 +313,7 @@ impl FixtureGenerator {
 
                 out.push(Event {
                     ts,
-                    ingest_ts: Some(ts),
+                    ingest_ts: None,
                     dur: None,
                     kind: EventKind::Log,
                     service,

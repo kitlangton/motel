@@ -162,7 +162,7 @@ impl Catalog {
     }
 
     /// Return candidate files overlapping `[w0, w1]` ordered by descending `max_ts`
-    /// (Astra's merge rule, engine.md §4).
+    /// (`docs/engine.md` §4).
     pub fn candidates_by_max_ts_desc(
         &self,
         w0: i64,

@@ -202,7 +202,7 @@ impl Reader {
 
     /// Primitive 1: Recent errors for a service (engine.md §4).
     /// When `window` is `None`, searches the last 24 h first and walks back to 14 d if fewer
-    /// than `limit` errors are found in 24 h. Uses Astra's descending-`max_ts` merge rule.
+    /// than `limit` errors are found in 24 h. Uses the descending-`max_ts` merge rule (`docs/engine.md` §4).
     pub fn recent_errors(
         &self,
         service: &str,
@@ -696,7 +696,7 @@ impl Reader {
         })
     }
 
-    /// Execute Astra's descending-`max_ts` merge rule across overlapping files (engine.md §4):
+    /// Execute the descending-`max_ts` merge rule across overlapping files (`docs/engine.md` §4):
     /// visit files in descending `max_ts`; stop once `k` rows are collected and the next
     /// file's `max_ts` is older than the `k`-th row's `ts`.
     fn run_descending_ts_merge<F>(
