@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -14,9 +14,18 @@ use crate::schema::{
     configure_reader_conn, configure_reader_limits, ensure_sqlite_environment, sqlite_file_uri,
 };
 use crate::{
-    Clock, EventKind, EventRow, EventSource, QueryMeta, QueryResult, SqlRow, SqlValue, StoreError,
-    SystemClock, TimeWindow,
+    Clock, EventKind, EventRow, EventSource, QueryMeta, QueryResult, SqlRow, SqlTable, SqlValue,
+    StoreError, SystemClock, TimeWindow,
 };
+
+/// Column list that [`event_row_from_sql`] expects, in order, for `SELECT ... FROM events`.
+pub const EVENT_COLUMNS: &str = "id, ts, ingest_ts, dur, kind, service, severity, status, err, name, \
+     trace_id, span_id, parent_id, session_id, request_id, res, src, artifact, body, json(attrs)";
+
+/// Map a row selected with [`EVENT_COLUMNS`] from the file for `day` into an [`EventRow`].
+pub fn event_row_from_sql(row: &Row<'_>, day: &str) -> rusqlite::Result<EventRow> {
+    map_event_row_with_day(row, day)
+}
 
 /// Default query deadline: 2 seconds (engine.md §4).
 pub const DEFAULT_QUERY_DEADLINE: Duration = Duration::from_secs(2);
@@ -229,6 +238,36 @@ impl Reader {
         let mut r = self.clone();
         r.default_deadline = deadline.min(MAX_QUERY_DEADLINE);
         r
+    }
+
+    /// Current time from this reader's clock (Unix ns).
+    pub fn now_ns(&self) -> i64 {
+        self.clock.now_ns()
+    }
+
+    /// True when this reader reads the files directly in daemonless CLI mode.
+    pub fn is_direct(&self) -> bool {
+        self.read_only_cli_mode
+    }
+
+    /// The per-query deadline this reader applies (`docs/engine.md` §4).
+    pub fn default_deadline(&self) -> Duration {
+        self.default_deadline
+    }
+
+    /// Run trusted, read-only SQL against one catalog file on a pooled read connection with
+    /// the progress-handler `deadline`. Higher-level query crates use this to build their own
+    /// per-file scans; select [`EVENT_COLUMNS`] and map rows with [`event_row_from_sql`].
+    pub fn query_file<T, F>(
+        &self,
+        entry: &CatalogEntry,
+        deadline: Instant,
+        f: F,
+    ) -> Result<T, StoreError>
+    where
+        F: FnMut(&Connection) -> rusqlite::Result<T>,
+    {
+        self.query_single_file(entry, deadline, f)
     }
 
     /// Primitive 1: Recent errors for a service (engine.md §4).
@@ -620,6 +659,26 @@ impl Reader {
         select: &str,
         window: Option<TimeWindow>,
     ) -> Result<QueryResult<SqlRow>, StoreError> {
+        let table = self.sql_table(select, window)?;
+        let rows = table
+            .rows
+            .into_iter()
+            .map(|values| SqlRow {
+                columns: table.columns.iter().cloned().zip(values).collect(),
+            })
+            .collect();
+        Ok(QueryResult {
+            rows,
+            meta: table.meta,
+        })
+    }
+
+    /// Same sandbox as [`Reader::sql`], but keeps the statement's column order.
+    pub fn sql_table(
+        &self,
+        select: &str,
+        window: Option<TimeWindow>,
+    ) -> Result<SqlTable, StoreError> {
         if has_multiple_statements(select) {
             return Err(StoreError::UnauthorizedSql(
                 "multiple SQL statements are not allowed".to_owned(),
@@ -709,18 +768,18 @@ impl Reader {
             let col_count = col_names.len();
 
             let mut rows_iter = stmt.query([]).map_err(map_sqlite_query_err)?;
-            let mut out_rows: Vec<SqlRow> = Vec::new();
+            let mut out_rows: Vec<Vec<SqlValue>> = Vec::new();
             let mut total_bytes = 0usize;
             let mut truncated = false;
 
             while let Some(row) = rows_iter.next().map_err(map_sqlite_query_err)? {
-                let mut map = BTreeMap::new();
+                let mut values = Vec::with_capacity(col_count);
                 let mut row_bytes = 0usize;
                 for (i, name) in col_names.iter().enumerate().take(col_count) {
                     let val_ref = row.get_ref(i).map_err(map_sqlite_query_err)?;
                     let (sql_val, b_len) = value_ref_to_sql_value(val_ref);
                     row_bytes += name.len() + b_len + 8;
-                    map.insert(name.clone(), sql_val);
+                    values.push(sql_val);
                 }
                 if out_rows.len() >= DEFAULT_MAX_ROWS
                     || total_bytes.saturating_add(row_bytes) > DEFAULT_MAX_BYTES
@@ -729,18 +788,19 @@ impl Reader {
                     break;
                 }
                 total_bytes += row_bytes;
-                out_rows.push(SqlRow { columns: map });
+                out_rows.push(values);
             }
-            Ok((out_rows, truncated))
+            Ok((col_names, out_rows, truncated))
         });
 
         let _ = conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let _ = conn.progress_handler(0, None::<fn() -> bool>);
         let _ = conn.release_memory();
 
-        let (rows, row_truncated) = query_res?;
+        let (columns, rows, row_truncated) = query_res?;
         let truncated = row_truncated || attached_truncated;
-        Ok(QueryResult {
+        Ok(SqlTable {
+            columns,
             rows,
             meta: self.build_meta(&snap, win, candidates.len(), truncated),
         })
@@ -1061,7 +1121,10 @@ fn map_event_row_with_day(row: &Row<'_>, day: &str) -> rusqlite::Result<EventRow
     })
 }
 
-fn collect_rows_bounded<I>(
+/// Collect mapped event rows until `max_rows` or `max_bytes` (by [`EventRow::estimated_bytes`])
+/// would be exceeded; the flag is true when rows were left behind. Rows without a day get
+/// `day` and an id of `<day>:<rowid>`.
+pub fn collect_rows_bounded<I>(
     iter: I,
     day: &str,
     max_rows: usize,

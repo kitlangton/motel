@@ -19,8 +19,8 @@ pub use crate::catalog::{
     DayFileState, NS_PER_DAY, NS_PER_HOUR, NS_PER_MINUTE, NS_PER_SECOND,
 };
 pub use crate::reader::{
-    Reader, ReaderPool, DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, DEFAULT_QUERY_DEADLINE,
-    MAX_QUERY_DEADLINE,
+    collect_rows_bounded, event_row_from_sql, Reader, ReaderPool, DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_ROWS, DEFAULT_QUERY_DEADLINE, EVENT_COLUMNS, MAX_QUERY_DEADLINE,
 };
 pub use crate::schema::{
     check_sqlite_version_number, ensure_sqlite_environment, set_sqlite_heap_limits,
@@ -317,6 +317,14 @@ pub enum SqlValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SqlRow {
     pub columns: BTreeMap<String, SqlValue>,
+}
+
+/// Ad-hoc SQL result that keeps the statement's column order ([`Reader::sql_table`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SqlTable {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<SqlValue>>,
+    pub meta: QueryMeta,
 }
 
 /// Inclusive event-time query window `[start_ns, end_ns]`.

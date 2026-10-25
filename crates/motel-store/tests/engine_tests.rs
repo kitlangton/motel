@@ -1259,3 +1259,53 @@ fn test_idle_shrink_releases_writer_cache_and_allocator_pages() {
     drop(store);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn query_file_and_sql_table_reader_primitives() {
+    let dir = temp_test_dir("query-file");
+    let t0 = 1_792_800_000 * NS_PER_SECOND;
+    let clock = Arc::new(ManualClock::new(t0));
+    let store = Store::open_with_clock(StoreConfig::new(&dir), clock.clone()).unwrap();
+    let writer = store.writer();
+    let reader = store.reader();
+    let rows: Vec<Event> = (0..6)
+        .map(|i| sample_event(t0 + i * 1000, "api", EventKind::Log, i % 2 == 0))
+        .collect();
+    writer.submit(rows).unwrap().wait().unwrap();
+
+    assert_eq!(reader.now_ns(), t0);
+    assert!(!reader.is_direct());
+
+    let snap = reader.catalog_snapshot();
+    let entry = snap.days.values().next().unwrap().clone();
+    let deadline = std::time::Instant::now() + reader.default_deadline();
+    let errs = reader
+        .query_file(&entry, deadline, |conn| {
+            let sql = format!("SELECT {} FROM events WHERE err = 1 ORDER BY id", motel_store::EVENT_COLUMNS);
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], |r| motel_store::event_row_from_sql(r, &entry.day))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap();
+    assert_eq!(errs.len(), 3);
+    assert_eq!(errs[0].id, format!("{}:1", entry.day));
+    assert_eq!(errs[0].attrs.as_deref(), Some(r#"{"http.route":"/users","http.status_code":200}"#));
+
+    let table = reader
+        .sql_table(
+            "SELECT service AS z, count(*) AS a FROM events GROUP BY 1",
+            Some(TimeWindow::new(t0 - NS_PER_HOUR, t0 + NS_PER_HOUR)),
+        )
+        .unwrap();
+    assert_eq!(table.columns, vec!["z".to_owned(), "a".to_owned()]);
+    assert_eq!(
+        table.rows,
+        vec![vec![SqlValue::Text("api".to_owned()), SqlValue::Integer(6)]]
+    );
+
+    let cli = Reader::open_read_only_with_clock(&dir, clock).unwrap();
+    assert!(cli.is_direct());
+    drop(cli);
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
