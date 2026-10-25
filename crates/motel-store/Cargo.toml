@@ -1,0 +1,15 @@
+[package]
+name = "motel-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+libsqlite3-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust.workspace = true
+crossbeam-channel.workspace = true
+libc.workspace = true
+memchr.workspace = true
