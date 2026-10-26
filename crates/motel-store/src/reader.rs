@@ -1,15 +1,18 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection, OpenFlags, Row};
+use rusqlite::{params, Connection, InterruptHandle, OpenFlags, Row};
 
 use crate::catalog::{Catalog, CatalogEntry, NS_PER_DAY, NS_PER_HOUR, NS_PER_MINUTE};
-use crate::schema::{configure_reader_conn, ensure_sqlite_environment};
+use crate::schema::{
+    configure_reader_conn, configure_reader_limits, ensure_sqlite_environment, sqlite_file_uri,
+};
 use crate::{
     Clock, EventKind, EventRow, EventSource, QueryMeta, QueryResult, SqlRow, SqlValue, StoreError,
     SystemClock, TimeWindow,
@@ -35,9 +38,13 @@ struct PooledConn {
     last_used: Instant,
 }
 
-/// Pool of up to 2 read connections, closed after 60 s idle (engine.md §4).
+/// Pool of up to 2 read connections, closed after 60 s idle (`docs/engine.md` §4).
+/// Also tracks in-flight `sql()` interrupt handles so writer `SQLITE_NOMEM` recovery
+/// can abort and reclaim memory from ad-hoc SQL connections (`docs/engine.md` §2.2, §9).
 pub struct ReaderPool {
     conns: Mutex<Vec<PooledConn>>,
+    active_sql: Mutex<Vec<(u64, InterruptHandle)>>,
+    next_sql_id: AtomicU64,
 }
 
 impl Default for ReaderPool {
@@ -50,12 +57,29 @@ impl ReaderPool {
     pub fn new() -> Self {
         Self {
             conns: Mutex::new(Vec::with_capacity(READER_POOL_CAPACITY)),
+            active_sql: Mutex::new(Vec::new()),
+            next_sql_id: AtomicU64::new(1),
         }
     }
 
-    /// Evict all pooled reader connections (called on `SQLITE_NOMEM` or before sealing a file).
+    /// Evict all pooled reader connections and interrupt any active `sql()` connections
+    /// (called on `SQLITE_NOMEM` or before sealing a file).
     pub fn close_all(&self) {
         self.conns.lock().unwrap().clear();
+        let active = self.active_sql.lock().unwrap();
+        for (_, handle) in active.iter() {
+            handle.interrupt();
+        }
+    }
+
+    fn register_sql_interrupt(&self, handle: InterruptHandle) -> u64 {
+        let id = self.next_sql_id.fetch_add(1, Ordering::Relaxed);
+        self.active_sql.lock().unwrap().push((id, handle));
+        id
+    }
+
+    fn unregister_sql_interrupt(&self, id: u64) {
+        self.active_sql.lock().unwrap().retain(|(entry_id, _)| *entry_id != id);
     }
 
     /// Evict connections idle for more than 60 seconds.
@@ -102,12 +126,19 @@ impl ReaderPool {
     }
 }
 
+struct SqlInterruptGuard<'a> {
+    pool: &'a ReaderPool,
+    id: u64,
+}
+
+impl Drop for SqlInterruptGuard<'_> {
+    fn drop(&mut self) {
+        self.pool.unregister_sql_interrupt(self.id);
+    }
+}
+
 fn open_file_read_only(path: &Path, is_sealed: bool) -> Result<Connection, StoreError> {
-    let uri = if is_sealed {
-        format!("file:{}?mode=ro&immutable=1", path.display())
-    } else {
-        format!("file:{}?mode=ro", path.display())
-    };
+    let uri = sqlite_file_uri(path, is_sealed);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
@@ -222,14 +253,14 @@ impl Reader {
                  WHERE err = 1 AND service = ?1 AND ts BETWEEN ?2 AND ?3
                  ORDER BY ts DESC, id DESC
                  LIMIT ?4",
-                |stmt, w0, w1, lim| {
+                |stmt, day, w0, w1, lim| {
                     let rows = stmt.query_map(params![service, w0, w1, lim as i64], map_event_row)?;
-                    rows.collect::<Result<Vec<_>, _>>()
+                    collect_rows_bounded(rows, day, k, DEFAULT_MAX_BYTES)
                 },
             );
         }
 
-        // Default: 24 h, walks back to 14 d until K rows are collected (engine.md §4).
+        // Default: 24 h, walks back to 14 d until K rows are collected (docs/engine.md §4).
         let now = self.clock.now_ns();
         let win_24h = TimeWindow::new(now.saturating_sub(24 * NS_PER_HOUR), now);
         let res_24h = self.run_descending_ts_merge(
@@ -243,9 +274,9 @@ impl Reader {
              WHERE err = 1 AND service = ?1 AND ts BETWEEN ?2 AND ?3
              ORDER BY ts DESC, id DESC
              LIMIT ?4",
-            |stmt, w0, w1, lim| {
+            |stmt, day, w0, w1, lim| {
                 let rows = stmt.query_map(params![service, w0, w1, lim as i64], map_event_row)?;
-                rows.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(rows, day, k, DEFAULT_MAX_BYTES)
             },
         )?;
         if res_24h.rows.len() >= k {
@@ -264,15 +295,15 @@ impl Reader {
              WHERE err = 1 AND service = ?1 AND ts BETWEEN ?2 AND ?3
              ORDER BY ts DESC, id DESC
              LIMIT ?4",
-            |stmt, w0, w1, lim| {
+            |stmt, day, w0, w1, lim| {
                 let rows = stmt.query_map(params![service, w0, w1, lim as i64], map_event_row)?;
-                rows.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(rows, day, k, DEFAULT_MAX_BYTES)
             },
         )
     }
 
     /// Primitive 2: Events for a trace ID across 14 d plus `evidence.sqlite`, merged by `ts` ascending
-    /// and deduplicated by `span_id` for spans (engine.md §3.3, §4).
+    /// and deduplicated by `span_id` for spans (`docs/engine.md` §3.3, §4).
     pub fn by_trace_id(
         &self,
         trace_id: &[u8; 16],
@@ -281,20 +312,16 @@ impl Reader {
         let now = self.clock.now_ns();
         let win = window.unwrap_or_else(|| TimeWindow::new(now.saturating_sub(14 * NS_PER_DAY), now));
         let snap = self.catalog_snapshot();
-        let candidates = if window.is_some() {
-            snap.candidates_by_max_ts_desc(win.start_ns, win.end_ns, true)
-        } else {
-            // Search all files overlapping the 14-day window (plus evidence).
-            snap.candidates_by_max_ts_desc(win.start_ns, win.end_ns, true)
-        };
+        let candidates = snap.candidates_by_max_ts_desc(win.start_ns, win.end_ns, true);
 
         let deadline = Instant::now() + self.default_deadline;
         let mut all_rows: Vec<EventRow> = Vec::new();
         let mut files_searched = 0usize;
+        let mut any_file_truncated = false;
 
         for entry in &candidates {
             files_searched += 1;
-            let file_rows = self.query_single_file(entry, deadline, |conn| {
+            let (file_rows, file_trunc) = self.query_single_file(entry, deadline, |conn| {
                 let mut stmt = conn.prepare_cached(
                     "SELECT id, ts, ingest_ts, dur, kind, service, severity, status, err, name,
                             trace_id, span_id, parent_id, session_id, request_id, res, src, artifact,
@@ -308,8 +335,11 @@ impl Reader {
                     params![&trace_id[..], (DEFAULT_MAX_ROWS + 1) as i64],
                     |r| map_event_row_with_day(r, &entry.day),
                 )?;
-                iter.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(iter, &entry.day, DEFAULT_MAX_ROWS, DEFAULT_MAX_BYTES)
             })?;
+            if file_trunc {
+                any_file_truncated = true;
+            }
             all_rows.extend(file_rows);
         }
 
@@ -320,7 +350,7 @@ impl Reader {
                 .then_with(|| a.row_id.cmp(&b.row_id))
         });
 
-        // Dedupe span rows by span_id (engine.md §3.3, §4).
+        // Dedupe span rows by span_id (docs/engine.md §3.3, §4).
         let mut seen_spans: HashSet<[u8; 8]> = HashSet::new();
         all_rows.retain(|r| {
             if r.kind == EventKind::Span {
@@ -331,7 +361,8 @@ impl Reader {
             true
         });
 
-        let (rows, truncated) = enforce_output_caps(all_rows, DEFAULT_MAX_ROWS, DEFAULT_MAX_BYTES);
+        let (rows, cap_truncated) = enforce_output_caps(all_rows, DEFAULT_MAX_ROWS, DEFAULT_MAX_BYTES);
+        let truncated = any_file_truncated || cap_truncated;
         Ok(QueryResult {
             rows,
             meta: self.build_meta(&snap, win, files_searched, truncated),
@@ -359,9 +390,9 @@ impl Reader {
              WHERE session_id = ?1 AND ts BETWEEN ?2 AND ?3
              ORDER BY ts DESC, id DESC
              LIMIT ?4",
-            |stmt, w0, w1, lim| {
+            |stmt, day, w0, w1, lim| {
                 let rows = stmt.query_map(params![session_id, w0, w1, lim as i64], map_event_row)?;
-                rows.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(rows, day, k, DEFAULT_MAX_BYTES)
             },
         )
     }
@@ -387,15 +418,15 @@ impl Reader {
              WHERE request_id = ?1 AND ts BETWEEN ?2 AND ?3
              ORDER BY ts DESC, id DESC
              LIMIT ?4",
-            |stmt, w0, w1, lim| {
+            |stmt, day, w0, w1, lim| {
                 let rows = stmt.query_map(params![request_id, w0, w1, lim as i64], map_event_row)?;
-                rows.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(rows, day, k, DEFAULT_MAX_BYTES)
             },
         )
     }
 
     /// Primitive 5: Events around a timestamp (`±half_window_ns`, default ±2 min),
-    /// optionally filtered by `service`, ordered by `ts ASC` (engine.md §4).
+    /// optionally filtered by `service`, ordered by `ts ASC` (`docs/engine.md` §4).
     pub fn around_timestamp(
         &self,
         center_ts: i64,
@@ -412,10 +443,11 @@ impl Reader {
 
         let mut all_rows: Vec<EventRow> = Vec::new();
         let mut files_searched = 0usize;
+        let mut any_file_truncated = false;
 
         for entry in &candidates {
             files_searched += 1;
-            let file_rows = self.query_single_file(entry, deadline, |conn| {
+            let (file_rows, file_trunc) = self.query_single_file(entry, deadline, |conn| {
                 if let Some(svc) = service {
                     let mut stmt = conn.prepare_cached(
                         "SELECT id, ts, ingest_ts, dur, kind, service, severity, status, err, name,
@@ -430,7 +462,7 @@ impl Reader {
                         params![svc, win.start_ns, win.end_ns, (k + 1) as i64],
                         |r| map_event_row_with_day(r, &entry.day),
                     )?;
-                    rows.collect::<Result<Vec<_>, _>>()
+                    collect_rows_bounded(rows, &entry.day, k, DEFAULT_MAX_BYTES)
                 } else {
                     let mut stmt = conn.prepare_cached(
                         "SELECT id, ts, ingest_ts, dur, kind, service, severity, status, err, name,
@@ -445,9 +477,12 @@ impl Reader {
                         params![win.start_ns, win.end_ns, (k + 1) as i64],
                         |r| map_event_row_with_day(r, &entry.day),
                     )?;
-                    rows.collect::<Result<Vec<_>, _>>()
+                    collect_rows_bounded(rows, &entry.day, k, DEFAULT_MAX_BYTES)
                 }
             })?;
+            if file_trunc {
+                any_file_truncated = true;
+            }
             all_rows.extend(file_rows);
         }
 
@@ -457,7 +492,8 @@ impl Reader {
                 .then_with(|| a.row_id.cmp(&b.row_id))
         });
 
-        let (rows, truncated) = enforce_output_caps(all_rows, k, DEFAULT_MAX_BYTES);
+        let (rows, cap_truncated) = enforce_output_caps(all_rows, k, DEFAULT_MAX_BYTES);
+        let truncated = any_file_truncated || cap_truncated;
         Ok(QueryResult {
             rows,
             meta: self.build_meta(&snap, win, files_searched, truncated),
@@ -465,7 +501,7 @@ impl Reader {
     }
 
     /// Primitive 6: Body substring search (default 24 h), newest arrival first (`ORDER BY id DESC`),
-    /// default limit 50 (engine.md §4).
+    /// default limit 50 (`docs/engine.md` §4).
     pub fn body_substring(
         &self,
         needle: &str,
@@ -477,20 +513,24 @@ impl Reader {
         let win = window.unwrap_or_else(|| TimeWindow::new(now.saturating_sub(24 * NS_PER_HOUR), now));
         let k = limit.clamp(1, DEFAULT_MAX_ROWS);
         let snap = self.catalog_snapshot();
-        // Visit files in descending arrival order (newest arrival first, engine.md §4).
+        // Visit files in descending arrival order (newest arrival first, docs/engine.md §4).
         let candidates = snap.candidates_by_ingest_desc(win.start_ns, win.end_ns, true);
         let deadline = Instant::now() + self.default_deadline;
 
         let mut collected: Vec<EventRow> = Vec::new();
+        let mut collected_bytes = 0usize;
+        let mut truncated = false;
         let mut files_searched = 0usize;
 
         for entry in &candidates {
-            if collected.len() > k {
+            if collected.len() >= k || truncated {
                 break;
             }
             files_searched += 1;
-            let remaining = (k + 1).saturating_sub(collected.len()).max(1);
-            let file_rows = self.query_single_file(entry, deadline, |conn| {
+            let remaining_rows = k.saturating_sub(collected.len());
+            let remaining_bytes = DEFAULT_MAX_BYTES.saturating_sub(collected_bytes);
+            let sql_limit = remaining_rows + 1;
+            let (file_rows, file_trunc) = self.query_single_file(entry, deadline, |conn| {
                 if let Some(svc) = service {
                     let mut stmt = conn.prepare_cached(
                         "SELECT id, ts, ingest_ts, dur, kind, service, severity, status, err, name,
@@ -502,10 +542,10 @@ impl Reader {
                          LIMIT ?5",
                     )?;
                     let rows = stmt.query_map(
-                        params![svc, win.start_ns, win.end_ns, needle, remaining as i64],
+                        params![svc, win.start_ns, win.end_ns, needle, sql_limit as i64],
                         |r| map_event_row_with_day(r, &entry.day),
                     )?;
-                    rows.collect::<Result<Vec<_>, _>>()
+                    collect_rows_bounded(rows, &entry.day, remaining_rows, remaining_bytes)
                 } else {
                     let mut stmt = conn.prepare_cached(
                         "SELECT id, ts, ingest_ts, dur, kind, service, severity, status, err, name,
@@ -517,24 +557,30 @@ impl Reader {
                          LIMIT ?4",
                     )?;
                     let rows = stmt.query_map(
-                        params![win.start_ns, win.end_ns, needle, remaining as i64],
+                        params![win.start_ns, win.end_ns, needle, sql_limit as i64],
                         |r| map_event_row_with_day(r, &entry.day),
                     )?;
-                    rows.collect::<Result<Vec<_>, _>>()
+                    collect_rows_bounded(rows, &entry.day, remaining_rows, remaining_bytes)
                 }
             })?;
-            collected.extend(file_rows);
+            for r in file_rows {
+                collected_bytes += r.estimated_bytes();
+                collected.push(r);
+            }
+            if file_trunc {
+                truncated = true;
+                break;
+            }
         }
 
-        let (rows, truncated) = enforce_output_caps(collected, k, DEFAULT_MAX_BYTES);
         Ok(QueryResult {
-            rows,
+            rows: collected,
             meta: self.build_meta(&snap, win, files_searched, truncated),
         })
     }
 
     /// Primitive 7: Attribute equality search via `attr(attrs, ?key) = ?val` (default 24 h),
-    /// ordered by `ts DESC` using the merge rule (engine.md §4).
+    /// ordered by `ts DESC` using the merge rule (`docs/engine.md` §4).
     pub fn by_attr(
         &self,
         key: &str,
@@ -558,17 +604,17 @@ impl Reader {
                AND (attr(attrs, ?3) = ?4 OR (?5 IS NOT NULL AND attr(attrs, ?3) = ?5))
              ORDER BY ts DESC, id DESC
              LIMIT ?6",
-            |stmt, w0, w1, lim| {
+            |stmt, day, w0, w1, lim| {
                 let rows =
                     stmt.query_map(params![w0, w1, key, val, parsed_int, lim as i64], map_event_row)?;
-                rows.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(rows, day, k, DEFAULT_MAX_BYTES)
             },
         )
     }
 
     /// Primitive 8: Sandboxed ad-hoc SQL over a `temp view events` that is a `UNION ALL` of
     /// attached files in the window (default 24 h, at most 30 days, plus `evidence.sqlite`)
-    /// with the window inside each branch (engine.md §4).
+    /// with the window inside each branch (`docs/engine.md` §4).
     pub fn sql(
         &self,
         select: &str,
@@ -583,7 +629,7 @@ impl Reader {
         let now = self.clock.now_ns();
         let raw_win =
             window.unwrap_or_else(|| TimeWindow::new(now.saturating_sub(24 * NS_PER_HOUR), now));
-        // Clamp window to at most 30 days (engine.md §4).
+        // Clamp window to at most 30 days (docs/engine.md §4).
         let max_span = 30 * NS_PER_DAY;
         let win = if raw_win.end_ns.saturating_sub(raw_win.start_ns) > max_span {
             TimeWindow::new(raw_win.end_ns - max_span, raw_win.end_ns)
@@ -593,8 +639,9 @@ impl Reader {
 
         let snap = self.catalog_snapshot();
         let mut candidates = snap.candidates_by_max_ts_desc(win.start_ns, win.end_ns, true);
-        // SQLITE_MAX_ATTACHED = 32 (§2.2).
-        if candidates.len() > 32 {
+        // SQLITE_MAX_ATTACHED = 32 (§2.2). Mark result truncated if files beyond 32 are dropped.
+        let attached_truncated = candidates.len() > 32;
+        if attached_truncated {
             candidates.truncate(32);
         }
 
@@ -606,15 +653,16 @@ impl Reader {
              PRAGMA temp_store = FILE;
              PRAGMA busy_timeout = 2000;"
         ))?;
+        configure_reader_limits(&conn);
         crate::jsonb::register_attr_function(&conn)?;
+        let _sql_guard = SqlInterruptGuard {
+            pool: &self.pool,
+            id: self.pool.register_sql_interrupt(conn.get_interrupt_handle()),
+        };
 
         // Attach each file as d0, d1, ... and build TEMP VIEW events before enabling query_only.
         for (idx, entry) in candidates.iter().enumerate() {
-            let uri = if entry.state.is_sealed() {
-                format!("file:{}?mode=ro&immutable=1", entry.path.display())
-            } else {
-                format!("file:{}?mode=ro", entry.path.display())
-            };
+            let uri = sqlite_file_uri(&entry.path, entry.state.is_sealed());
             let alias = format!("d{idx}");
             conn.execute(&format!("ATTACH DATABASE ?1 AS {alias}"), params![uri])?;
         }
@@ -675,7 +723,7 @@ impl Reader {
                     map.insert(name.clone(), sql_val);
                 }
                 if out_rows.len() >= DEFAULT_MAX_ROWS
-                    || (!out_rows.is_empty() && total_bytes + row_bytes > DEFAULT_MAX_BYTES)
+                    || total_bytes.saturating_add(row_bytes) > DEFAULT_MAX_BYTES
                 {
                     truncated = true;
                     break;
@@ -688,8 +736,10 @@ impl Reader {
 
         let _ = conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         let _ = conn.progress_handler(0, None::<fn() -> bool>);
+        let _ = conn.release_memory();
 
-        let (rows, truncated) = query_res?;
+        let (rows, row_truncated) = query_res?;
+        let truncated = row_truncated || attached_truncated;
         Ok(QueryResult {
             rows,
             meta: self.build_meta(&snap, win, candidates.len(), truncated),
@@ -708,7 +758,7 @@ impl Reader {
         mut run_stmt: F,
     ) -> Result<QueryResult<EventRow>, StoreError>
     where
-        F: FnMut(&mut rusqlite::Statement<'_>, i64, i64, usize) -> rusqlite::Result<Vec<EventRow>>,
+        F: FnMut(&mut rusqlite::Statement<'_>, &str, i64, i64, usize) -> rusqlite::Result<(Vec<EventRow>, bool)>,
     {
         let snap = self.catalog_snapshot();
         let candidates = snap.candidates_by_max_ts_desc(win.start_ns, win.end_ns, include_evidence);
@@ -720,7 +770,7 @@ impl Reader {
 
         for entry in &candidates {
             // Early-stop check: once K rows are collected and the next file's max_ts is strictly
-            // older than the K-th row's ts, no remaining file can beat the K-th row (engine.md §4).
+            // older than the K-th row's ts, no remaining file can beat the K-th row (docs/engine.md §4).
             if collected.len() >= k {
                 let kth_ts = collected[k - 1].ts;
                 let next_max_ts = entry.max_ts.unwrap_or(i64::MIN);
@@ -730,17 +780,12 @@ impl Reader {
             }
 
             files_searched += 1;
-            let mut file_rows = self.query_single_file(entry, deadline, |conn| {
+            let (file_rows, file_trunc) = self.query_single_file(entry, deadline, |conn| {
                 let mut stmt = conn.prepare_cached(sql)?;
-                run_stmt(&mut stmt, win.start_ns, win.end_ns, k + 1)
+                run_stmt(&mut stmt, &entry.day, win.start_ns, win.end_ns, k + 1)
             })?;
 
-            for r in &mut file_rows {
-                r.day = entry.day.clone();
-                r.id = format!("{}:{}", entry.day, r.row_id);
-            }
-
-            if file_rows.len() > k {
+            if file_trunc {
                 hit_more_than_k = true;
             }
 
@@ -1016,6 +1061,37 @@ fn map_event_row_with_day(row: &Row<'_>, day: &str) -> rusqlite::Result<EventRow
     })
 }
 
+fn collect_rows_bounded<I>(
+    iter: I,
+    day: &str,
+    max_rows: usize,
+    max_bytes: usize,
+) -> rusqlite::Result<(Vec<EventRow>, bool)>
+where
+    I: Iterator<Item = rusqlite::Result<EventRow>>,
+{
+    let mut out = Vec::with_capacity(max_rows.min(128));
+    let mut total_bytes = 0usize;
+    let mut truncated = false;
+
+    for item in iter {
+        let mut r = item?;
+        if !day.is_empty() && r.day.is_empty() {
+            r.day = day.to_owned();
+            r.id = format!("{day}:{}", r.row_id);
+        }
+        let row_bytes = r.estimated_bytes();
+        if out.len() >= max_rows || total_bytes.saturating_add(row_bytes) > max_bytes {
+            truncated = true;
+            break;
+        }
+        total_bytes += row_bytes;
+        out.push(r);
+    }
+
+    Ok((out, truncated))
+}
+
 fn enforce_output_caps(
     rows: Vec<EventRow>,
     max_rows: usize,
@@ -1027,7 +1103,7 @@ fn enforce_output_caps(
 
     for r in rows {
         let row_bytes = r.estimated_bytes();
-        if out.len() >= max_rows || (!out.is_empty() && total_bytes + row_bytes > max_bytes) {
+        if out.len() >= max_rows || total_bytes.saturating_add(row_bytes) > max_bytes {
             truncated = true;
             break;
         }

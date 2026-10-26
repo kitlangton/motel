@@ -1,5 +1,7 @@
+use std::path::Path;
 use std::sync::Once;
 
+use rusqlite::limits::Limit;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::jsonb::register_attr_function;
@@ -215,7 +217,44 @@ pub fn configure_checkpointer_conn(conn: &Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
-/// Configure PRAGMAs on a reader connection (engine.md §2.2).
+/// Build a percent-encoded SQLite `file:` URI for read-only access (`docs/engine.md` §2.2, §4).
+pub fn sqlite_file_uri(path: &Path, immutable: bool) -> String {
+    let raw = path.to_string_lossy();
+    let mut encoded = String::with_capacity(raw.len() + 32);
+    encoded.push_str("file:");
+    for b in raw.bytes() {
+        match b {
+            b'%' => encoded.push_str("%25"),
+            b'?' => encoded.push_str("%3F"),
+            b'#' => encoded.push_str("%23"),
+            b' ' => encoded.push_str("%20"),
+            0x00..=0x1f | 0x7f => {
+                encoded.push_str(&format!("%{b:02X}"));
+            }
+            _ => encoded.push(b as char),
+        }
+    }
+    if immutable {
+        encoded.push_str("?mode=ro&immutable=1");
+    } else {
+        encoded.push_str("?mode=ro");
+    }
+    encoded
+}
+
+/// Apply defensive per-connection SQLite limits to a reader or sandboxed SQL connection (`docs/engine.md` §4).
+pub fn configure_reader_limits(conn: &Connection) {
+    // Cap any single string/blob allocation (e.g. printf, group_concat, zeroblob) at 1 MiB.
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, 1_048_576);
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 65_536);
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_COLUMN, 128);
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_EXPR_DEPTH, 64);
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_COMPOUND_SELECT, 64);
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_VDBE_OP, 25_000);
+    let _ = conn.set_limit(Limit::SQLITE_LIMIT_FUNCTION_ARG, 16);
+}
+
+/// Configure PRAGMAs on a reader connection (`docs/engine.md` §2.2).
 /// `attached_count` adds 256 KiB per attached file above the 2 MiB base cache.
 pub fn configure_reader_conn(
     conn: &Connection,
@@ -230,6 +269,7 @@ pub fn configure_reader_conn(
          PRAGMA busy_timeout = 2000;"
     );
     conn.execute_batch(&sql)?;
+    configure_reader_limits(conn);
     register_attr_function(conn)?;
     Ok(())
 }

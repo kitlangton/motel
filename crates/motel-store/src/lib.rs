@@ -8,7 +8,8 @@ pub mod writer;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -369,10 +370,14 @@ pub struct StoreConfig {
     pub group_commit_max_rows: usize,
     /// Group commit byte threshold (default 1 MiB, engine.md §3.2).
     pub group_commit_max_bytes: usize,
-    /// Default reader progress-handler deadline (default 2 s, max 10 s, engine.md §4).
+    /// Default reader progress-handler deadline (default 2 s, max 10 s, `docs/engine.md` §4).
     pub query_deadline: Duration,
     /// Optional test hook: stop background sealing after step N (1..=5) to simulate crashes (§2.5).
     pub seal_stop_after_step: Option<u8>,
+    /// Optional test hook: fail the next N group commits on the writer thread.
+    pub fail_next_commits: Arc<AtomicUsize>,
+    /// Optional test hook: fail the next N `evidence.sqlite` commits on the writer thread.
+    pub fail_next_evidence_commits: Arc<AtomicUsize>,
 }
 
 impl StoreConfig {
@@ -391,7 +396,41 @@ impl StoreConfig {
             group_commit_max_bytes: 1_048_576,
             query_deadline: DEFAULT_QUERY_DEADLINE,
             seal_stop_after_step: None,
+            fail_next_commits: Arc::new(AtomicUsize::new(0)),
+            fail_next_evidence_commits: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub(crate) fn take_injected_commit_failure(&self) -> bool {
+        let mut cur = self.fail_next_commits.load(Ordering::SeqCst);
+        while cur > 0 {
+            match self.fail_next_commits.compare_exchange_weak(
+                cur,
+                cur - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => cur = actual,
+            }
+        }
+        false
+    }
+
+    pub(crate) fn take_injected_evidence_failure(&self) -> bool {
+        let mut cur = self.fail_next_evidence_commits.load(Ordering::SeqCst);
+        while cur > 0 {
+            match self.fail_next_evidence_commits.compare_exchange_weak(
+                cur,
+                cur - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => cur = actual,
+            }
+        }
+        false
     }
 }
 
@@ -446,15 +485,25 @@ impl From<std::io::Error> for StoreError {
     }
 }
 
-/// Top-level day-split SQLite storage engine instance (engine.md §1–§5).
+/// Top-level day-split SQLite storage engine instance (`docs/engine.md` §1–§5).
+///
+/// Field order matters: `writer_ctl` and `reader_pool` are shut down in [`Drop`] before
+/// `_lock` (the last field) releases `motel.lock`.
 pub struct Store {
     config: StoreConfig,
-    _lock: LockFile,
     catalog: Arc<RwLock<Catalog>>,
     reader_pool: Arc<ReaderPool>,
     writer_ctl: WriterControl,
     reader: Reader,
-    quarantined_days: Vec<String>,
+    quarantined_days: Arc<Mutex<Vec<String>>>,
+    _lock: LockFile,
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        self.writer_ctl.shutdown();
+        self.reader_pool.close_all();
+    }
 }
 
 impl Store {
@@ -475,24 +524,37 @@ impl Store {
         let now_ns = clock.now_ns();
         let today = utc_day_string(now_ns);
 
-        let mut quarantined_days = Vec::new();
+        let mut initial_quarantined = Vec::new();
+        let mut deferred_seal_days = Vec::new();
+        let mut initial_conflicts = Vec::new();
         recover_on_startup(
             &config.root_dir,
             &today,
             now_ns,
             &catalog,
-            &mut quarantined_days,
+            &mut initial_quarantined,
+            &mut deferred_seal_days,
+            &mut initial_conflicts,
         )?;
 
-        let scanned = Catalog::scan_dir(&config.root_dir)?;
+        let mut scanned = Catalog::scan_dir(&config.root_dir)?;
+        {
+            let prev = catalog.read().unwrap();
+            for (d, err) in &prev.seal_errors {
+                scanned.seal_errors.insert(d.clone(), err.clone());
+            }
+        }
         *catalog.write().unwrap() = scanned;
 
+        let quarantined_days = Arc::new(Mutex::new(initial_quarantined));
         let reader_pool = Arc::new(ReaderPool::new());
         let writer_ctl = WriterControl::spawn(
             config.clone(),
             Arc::clone(&clock),
             Arc::clone(&catalog),
             Arc::clone(&reader_pool),
+            Arc::clone(&quarantined_days),
+            deferred_seal_days,
         )?;
 
         let reader = Reader::new(
@@ -506,12 +568,12 @@ impl Store {
 
         Ok(Self {
             config,
-            _lock: lock,
             catalog,
             reader_pool,
             writer_ctl,
             reader,
             quarantined_days,
+            _lock: lock,
         })
     }
 
@@ -530,13 +592,13 @@ impl Store {
         self.catalog.read().unwrap().clone()
     }
 
-    /// Return the list of day files quarantined as `<D>.corrupt.sqlite` during startup recovery.
-    pub fn quarantined_days(&self) -> &[String] {
-        &self.quarantined_days
+    /// Return the list of day files quarantined as `<D>.corrupt.sqlite` during startup recovery or runtime seal.
+    pub fn quarantined_days(&self) -> Vec<String> {
+        self.quarantined_days.lock().unwrap().clone()
     }
 
     /// Return the cursor with the newest `updated_ingest_ts` across today's, yesterday's,
-    /// and `evidence.sqlite` files (engine.md §3.4).
+    /// and `evidence.sqlite` files (`docs/engine.md` §3.4).
     pub fn latest_cursor(&self, source: &str) -> Result<Option<CursorUpdate>, StoreError> {
         query_latest_cursor(&self.catalog, source)
     }

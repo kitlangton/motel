@@ -200,23 +200,32 @@ fn extract_from_json_text(bytes: &[u8], key: &str) -> Value {
     }
 }
 
+/// Maximum nesting depth for JSONB encoding (`docs/engine.md` §2.3, §3.1).
+pub const MAX_JSONB_DEPTH: usize = 128;
+
 /// Encode a JSON string directly into `out` in SQLite's binary JSONB format in a single
-/// zero-allocation pass (engine.md §2.3, sqlite3.c JSONB encoding spec).
+/// zero-allocation pass (`docs/engine.md` §2.3, sqlite3.c JSONB encoding spec).
+///
+/// Validates RFC 8259 numbers, string escapes, trailing bytes, and nesting depth (≤ 128).
+/// Falls back to `serde_json` for Unicode surrogate pairs or large(>64 KiB) nested containers,
+/// and returns `false` (leaving `out` empty) if `json_str` is invalid JSON or exceeds depth 128.
 pub fn encode_json_str_to_jsonb_buf(json_str: &str, out: &mut Vec<u8>) -> bool {
     out.clear();
     out.reserve(json_str.len() + 8);
     let bytes = json_str.as_bytes();
     let mut pos = skip_ws(bytes, 0);
-    if !encode_fast_value(bytes, &mut pos, out) {
-        out.clear();
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) else {
-            return false;
-        };
-        encode_json_value_to_jsonb(&val, out);
+    if encode_fast_value(bytes, &mut pos, out, 0) && skip_ws(bytes, pos) == bytes.len() {
         return true;
     }
-    pos = skip_ws(bytes, pos);
-    pos == bytes.len()
+    out.clear();
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return false;
+    };
+    if !encode_json_value_to_jsonb(&val, out, 0) {
+        out.clear();
+        return false;
+    }
+    true
 }
 
 /// Encode a `serde_json::Value` or JSON string into a freshly allocated JSONB `Vec<u8>`.
@@ -237,14 +246,17 @@ fn skip_ws(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-fn encode_fast_value(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
+fn encode_fast_value(b: &[u8], pos: &mut usize, out: &mut Vec<u8>, depth: usize) -> bool {
+    if depth > MAX_JSONB_DEPTH {
+        return false;
+    }
     *pos = skip_ws(b, *pos);
     let Some(&ch) = b.get(*pos) else {
         return false;
     };
     match ch {
-        b'{' => encode_fast_object(b, pos, out),
-        b'[' => encode_fast_array(b, pos, out),
+        b'{' => encode_fast_object(b, pos, out, depth + 1),
+        b'[' => encode_fast_array(b, pos, out, depth + 1),
         b'"' => encode_fast_string(b, pos, out),
         b't' => {
             if b.get(*pos..*pos + 4) == Some(b"true") {
@@ -278,7 +290,10 @@ fn encode_fast_value(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
     }
 }
 
-fn encode_fast_object(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
+fn encode_fast_object(b: &[u8], pos: &mut usize, out: &mut Vec<u8>, depth: usize) -> bool {
+    if depth > MAX_JSONB_DEPTH {
+        return false;
+    }
     *pos += 1; // skip '{'
     *pos = skip_ws(b, *pos);
     if b.get(*pos) == Some(&b'}') {
@@ -304,7 +319,7 @@ fn encode_fast_object(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
             return false;
         }
         *pos += 1;
-        if !encode_fast_value(b, pos, out) {
+        if !encode_fast_value(b, pos, out, depth) {
             return false;
         }
         *pos = skip_ws(b, *pos);
@@ -330,7 +345,10 @@ fn encode_fast_object(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
     true
 }
 
-fn encode_fast_array(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
+fn encode_fast_array(b: &[u8], pos: &mut usize, out: &mut Vec<u8>, depth: usize) -> bool {
+    if depth > MAX_JSONB_DEPTH {
+        return false;
+    }
     *pos += 1; // skip '['
     *pos = skip_ws(b, *pos);
     if b.get(*pos) == Some(&b']') {
@@ -343,7 +361,7 @@ fn encode_fast_array(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
     let payload_start = out.len();
 
     loop {
-        if !encode_fast_value(b, pos, out) {
+        if !encode_fast_value(b, pos, out, depth) {
             return false;
         }
         *pos = skip_ws(b, *pos);
@@ -386,7 +404,35 @@ fn encode_fast_string(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
         }
         if ch == b'\\' {
             has_escape = true;
-            i += 2;
+            let Some(&esc) = b.get(i + 1) else {
+                return false;
+            };
+            match esc {
+                b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {
+                    i += 2;
+                }
+                b'u' => {
+                    let Some(hex) = b.get(i + 2..i + 6) else {
+                        return false;
+                    };
+                    if !hex.iter().all(u8::is_ascii_hexdigit) {
+                        return false;
+                    }
+                    let Ok(hex_str) = std::str::from_utf8(hex) else {
+                        return false;
+                    };
+                    let Ok(code) = u16::from_str_radix(hex_str, 16) else {
+                        return false;
+                    };
+                    // Defer UTF-16 surrogates to the serde_json fallback so unpaired surrogates
+                    // are rejected and valid pairs are decoded into UTF-8.
+                    if (0xD800..=0xDFFF).contains(&code) {
+                        return false;
+                    }
+                    i += 6;
+                }
+                _ => return false,
+            }
             continue;
         }
         if ch < 0x20 {
@@ -401,24 +447,75 @@ fn encode_fast_number(b: &[u8], pos: &mut usize, out: &mut Vec<u8>) -> bool {
     let start = *pos;
     let mut i = start;
     let mut is_float = false;
+
     if b.get(i) == Some(&b'-') {
         i += 1;
     }
-    while i < b.len() {
-        match b[i] {
-            b'0'..=b'9' => i += 1,
-            b'.' | b'e' | b'E' | b'+' | b'-' => {
-                is_float = true;
+
+    // RFC 8259 integer part: either '0' (not followed by digit) or '1'..'9' followed by *digits.
+    match b.get(i) {
+        Some(&b'0') => {
+            i += 1;
+            if matches!(b.get(i), Some(b'0'..=b'9')) {
+                return false;
+            }
+        }
+        Some(b'1'..=b'9') => {
+            i += 1;
+            while matches!(b.get(i), Some(b'0'..=b'9')) {
                 i += 1;
             }
-            _ => break,
+        }
+        _ => return false,
+    }
+
+    // Optional fraction part: '.' followed by 1+ digits.
+    if b.get(i) == Some(&b'.') {
+        is_float = true;
+        i += 1;
+        if !matches!(b.get(i), Some(b'0'..=b'9')) {
+            return false;
+        }
+        while matches!(b.get(i), Some(b'0'..=b'9')) {
+            i += 1;
         }
     }
-    if i == start {
-        return false;
+
+    // Optional exponent part: ('e' | 'E') ['+' | '-'] 1+ digits.
+    if matches!(b.get(i), Some(&b'e') | Some(&b'E')) {
+        is_float = true;
+        i += 1;
+        if matches!(b.get(i), Some(&b'+') | Some(&b'-')) {
+            i += 1;
+        }
+        if !matches!(b.get(i), Some(b'0'..=b'9')) {
+            return false;
+        }
+        while matches!(b.get(i), Some(b'0'..=b'9')) {
+            i += 1;
+        }
     }
+
     let slice = &b[start..i];
-    let etype = if is_float { JSONB_FLOAT } else { JSONB_INT };
+    let Ok(num_str) = std::str::from_utf8(slice) else {
+        return false;
+    };
+    let etype = if is_float {
+        let Ok(f) = num_str.parse::<f64>() else {
+            return false;
+        };
+        if !f.is_finite() {
+            return false;
+        }
+        JSONB_FLOAT
+    } else if num_str.parse::<i64>().is_ok() {
+        JSONB_INT
+    } else if num_str.parse::<f64>().is_ok_and(f64::is_finite) {
+        JSONB_FLOAT
+    } else {
+        return false;
+    };
+
     append_jsonb_header(out, etype, slice.len());
     out.extend_from_slice(slice);
     *pos = i;
@@ -440,14 +537,17 @@ fn append_jsonb_header(out: &mut Vec<u8>, etype: u8, payload_len: usize) {
     }
 }
 
-fn encode_json_value_to_jsonb(val: &serde_json::Value, out: &mut Vec<u8>) {
+fn encode_json_value_to_jsonb(val: &serde_json::Value, out: &mut Vec<u8>, depth: usize) -> bool {
+    if depth > MAX_JSONB_DEPTH {
+        return false;
+    }
     match val {
         serde_json::Value::Null => append_jsonb_header(out, JSONB_NULL, 0),
         serde_json::Value::Bool(true) => append_jsonb_header(out, JSONB_TRUE, 0),
         serde_json::Value::Bool(false) => append_jsonb_header(out, JSONB_FALSE, 0),
         serde_json::Value::Number(n) => {
             let s = n.to_string();
-            let etype = if n.is_i64() || n.is_u64() {
+            let etype = if n.is_i64() {
                 JSONB_INT
             } else {
                 JSONB_FLOAT
@@ -460,24 +560,35 @@ fn encode_json_value_to_jsonb(val: &serde_json::Value, out: &mut Vec<u8>) {
             out.extend_from_slice(s.as_bytes());
         }
         serde_json::Value::Array(arr) => {
+            if depth + 1 > MAX_JSONB_DEPTH {
+                return false;
+            }
             let mut body = Vec::new();
             for item in arr {
-                encode_json_value_to_jsonb(item, &mut body);
+                if !encode_json_value_to_jsonb(item, &mut body, depth + 1) {
+                    return false;
+                }
             }
             append_jsonb_header(out, JSONB_ARRAY, body.len());
             out.extend_from_slice(&body);
         }
         serde_json::Value::Object(obj) => {
+            if depth + 1 > MAX_JSONB_DEPTH {
+                return false;
+            }
             let mut body = Vec::new();
             for (k, v) in obj {
                 append_jsonb_header(&mut body, JSONB_TEXTRAW, k.len());
                 body.extend_from_slice(k.as_bytes());
-                encode_json_value_to_jsonb(v, &mut body);
+                if !encode_json_value_to_jsonb(v, &mut body, depth + 1) {
+                    return false;
+                }
             }
             append_jsonb_header(out, JSONB_OBJECT, body.len());
             out.extend_from_slice(&body);
         }
     }
+    true
 }
 
 impl Resource {
@@ -544,46 +655,119 @@ impl Resource {
     }
 }
 
-/// 4,096-entry hash-to-id LRU cache for resource interning per file (engine.md §2.3).
+const LRU_NONE: usize = usize::MAX;
+
+struct LruNode {
+    key: [u8; 16],
+    id: i64,
+    prev: usize,
+    next: usize,
+}
+
+/// O(1) 4,096-entry hash-to-id LRU cache for resource interning per file (`docs/engine.md` §2.3).
 pub struct ResourceLru {
     cap: usize,
-    tick: u64,
-    entries: HashMap<[u8; 16], (i64, u64)>,
+    head: usize,
+    tail: usize,
+    nodes: Vec<LruNode>,
+    index: HashMap<[u8; 16], usize>,
 }
 
 impl ResourceLru {
     pub const DEFAULT_CAPACITY: usize = 4_096;
 
     pub fn new(cap: usize) -> Self {
+        let cap = cap.max(1);
         Self {
-            cap: cap.max(1),
-            tick: 0,
-            entries: HashMap::with_capacity(cap.min(4_096)),
+            cap,
+            head: LRU_NONE,
+            tail: LRU_NONE,
+            nodes: Vec::with_capacity(cap.min(4_096)),
+            index: HashMap::with_capacity(cap.min(4_096)),
         }
     }
 
     pub fn get(&mut self, hash: &[u8; 16]) -> Option<i64> {
-        self.tick = self.tick.wrapping_add(1);
-        let entry = self.entries.get_mut(hash)?;
-        entry.1 = self.tick;
-        Some(entry.0)
+        let &idx = self.index.get(hash)?;
+        self.move_to_head(idx);
+        Some(self.nodes[idx].id)
     }
 
     pub fn insert(&mut self, hash: [u8; 16], id: i64) {
-        self.tick = self.tick.wrapping_add(1);
-        if self.entries.len() >= self.cap && !self.entries.contains_key(&hash) {
-            if let Some((&oldest_key, _)) = self.entries.iter().min_by_key(|(_, (_, t))| *t) {
-                self.entries.remove(&oldest_key);
-            }
+        if let Some(&idx) = self.index.get(&hash) {
+            self.nodes[idx].id = id;
+            self.move_to_head(idx);
+            return;
         }
-        self.entries.insert(hash, (id, self.tick));
+
+        if self.nodes.len() < self.cap {
+            let idx = self.nodes.len();
+            self.nodes.push(LruNode {
+                key: hash,
+                id,
+                prev: LRU_NONE,
+                next: LRU_NONE,
+            });
+            self.attach_head(idx);
+            self.index.insert(hash, idx);
+        } else {
+            let evict_idx = self.tail;
+            self.unlink(evict_idx);
+            let old_key = self.nodes[evict_idx].key;
+            self.index.remove(&old_key);
+            self.nodes[evict_idx] = LruNode {
+                key: hash,
+                id,
+                prev: LRU_NONE,
+                next: LRU_NONE,
+            };
+            self.attach_head(evict_idx);
+            self.index.insert(hash, evict_idx);
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.nodes.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.nodes.is_empty()
+    }
+
+    fn move_to_head(&mut self, idx: usize) {
+        if self.head == idx {
+            return;
+        }
+        self.unlink(idx);
+        self.attach_head(idx);
+    }
+
+    fn unlink(&mut self, idx: usize) {
+        let prev = self.nodes[idx].prev;
+        let next = self.nodes[idx].next;
+        if prev != LRU_NONE {
+            self.nodes[prev].next = next;
+        } else {
+            self.head = next;
+        }
+        if next != LRU_NONE {
+            self.nodes[next].prev = prev;
+        } else {
+            self.tail = prev;
+        }
+        self.nodes[idx].prev = LRU_NONE;
+        self.nodes[idx].next = LRU_NONE;
+    }
+
+    fn attach_head(&mut self, idx: usize) {
+        self.nodes[idx].prev = LRU_NONE;
+        self.nodes[idx].next = self.head;
+        if self.head != LRU_NONE {
+            self.nodes[self.head].prev = idx;
+        }
+        self.head = idx;
+        if self.tail == LRU_NONE {
+            self.tail = idx;
+        }
     }
 }

@@ -6,7 +6,7 @@ use std::sync::RwLock;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
-use crate::schema::read_file_meta;
+use crate::schema::{read_file_meta, sqlite_file_uri};
 use crate::StoreError;
 
 pub const NS_PER_SECOND: i64 = 1_000_000_000;
@@ -106,11 +106,15 @@ impl CatalogEntry {
     }
 }
 
-/// Catalog of day files and `evidence.sqlite` (engine.md §4).
+/// Catalog of day files and `evidence.sqlite` (`docs/engine.md` §4).
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub days: BTreeMap<String, CatalogEntry>,
     pub evidence: Option<CatalogEntry>,
+    /// Days where both `<D>.hot.sqlite` and `<D>.sqlite` exist simultaneously on disk.
+    pub conflicting_days: Vec<String>,
+    /// Most recent seal error per day if a background or startup seal was deferred (e.g. `SQLITE_BUSY`).
+    pub seal_errors: BTreeMap<String, String>,
 }
 
 impl Catalog {
@@ -136,16 +140,31 @@ impl Catalog {
                 {
                     continue;
                 }
-                // Phase 2 `.sqlz` files are skipped in Phase 1 (TODO engine.md §2.6).
+                // Phase 2 `.sqlz` files are skipped in Phase 1 (TODO docs/engine.md §2.6).
                 if let Some((day, is_hot)) = parse_day_filename(fname) {
                     if let Ok(entry) = inspect_file(&path, &day, is_hot, false) {
-                        // Prefer sealed file over hot if both exist transiently.
-                        if let Some(existing) = catalog.days.get(&day) {
-                            if existing.state == DayFileState::Sealed && is_hot {
-                                continue;
+                        if let Some(existing) = catalog.days.remove(&day) {
+                            // Both `<D>.hot.sqlite` and `<D>.sqlite` exist on disk: keep both
+                            // so no rows are hidden or lost, and record the conflict.
+                            if !catalog.conflicting_days.contains(&day) {
+                                catalog.conflicting_days.push(day.clone());
                             }
+                            if existing.state == DayFileState::Sealed && is_hot {
+                                let hot_key = format!("{day}.hot");
+                                let mut hot_entry = entry;
+                                hot_entry.day = hot_key.clone();
+                                catalog.days.insert(day, existing);
+                                catalog.days.insert(hot_key, hot_entry);
+                            } else {
+                                let hot_key = format!("{day}.hot");
+                                let mut hot_entry = existing;
+                                hot_entry.day = hot_key.clone();
+                                catalog.days.insert(hot_key, hot_entry);
+                                catalog.days.insert(day, entry);
+                            }
+                        } else {
+                            catalog.days.insert(day, entry);
                         }
-                        catalog.days.insert(day, entry);
                     }
                 }
             }
@@ -268,16 +287,12 @@ pub fn inspect_file(
     is_hot_name: bool,
     is_evidence: bool,
 ) -> Result<CatalogEntry, StoreError> {
-    let uri = if !is_hot_name && !is_evidence {
-        format!("file:{}?mode=ro&immutable=1", path.display())
-    } else {
-        format!("file:{}?mode=ro", path.display())
-    };
+    let uri = sqlite_file_uri(path, !is_hot_name && !is_evidence);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(&uri, flags)?;
-    conn.busy_timeout(std::time::Duration::from_millis(1000))?;
+    conn.busy_timeout(std::time::Duration::from_millis(200))?;
     let meta = read_file_meta(&conn)?;
     let state = if is_evidence {
         DayFileState::Evidence
