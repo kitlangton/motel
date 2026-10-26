@@ -1,4 +1,4 @@
-//! Error-group fingerprints, computed at query time (api.md §1).
+//! Error-group fingerprints, computed at query time (`docs/agent-api.md` §8).
 //!
 //! A group is service + kind + name + normalized message. Normalization masks the parts of
 //! a message that vary between occurrences of the same error: quoted values, UUIDs, file
@@ -11,6 +11,54 @@ use xxhash_rust::xxh3::xxh3_64;
 const RAW_CAP: usize = 512;
 /// Normalized message length kept in the fingerprint.
 const NORM_CAP: usize = 200;
+
+/// Characters of a body or attribute value read for an error's message. SQL scans cut bodies
+/// with `substr(body, 1, MSG_CHARS)`, which also counts characters, so every surface sees the
+/// same input.
+pub const MSG_CHARS: usize = 512;
+/// Attributes tried, in order, when an error has no body.
+pub const MSG_ATTR_KEYS: [&str; 5] = [
+    "exception.message",
+    "error.message",
+    "exception.type",
+    "otel.status_description",
+    "status.message",
+];
+/// Characters a body may consist of and still count as empty. SQL scans use the same set:
+/// `trim(x, char(32, 9, 10, 13, 12))`.
+pub const BLANK: [char; 5] = [' ', '\t', '\n', '\r', '\x0c'];
+
+/// The message an error is grouped and shown by: the first [`MSG_CHARS`] characters of the
+/// body, else the first [`MSG_ATTR_KEYS`] attribute present (non-strings as JSON). `attrs` is
+/// the event's attributes as JSON text. This is the only input to [`fingerprint`] messages.
+pub fn group_message(body: Option<&str>, attrs: Option<&str>) -> String {
+    if let Some(b) = body {
+        let cut = cut_chars(b, MSG_CHARS);
+        if !cut.trim_matches(BLANK).is_empty() {
+            return cut.to_owned();
+        }
+    }
+    let Some(Ok(serde_json::Value::Object(map))) =
+        attrs.map(serde_json::from_str::<serde_json::Value>)
+    else {
+        return String::new();
+    };
+    for key in MSG_ATTR_KEYS {
+        match map.get(key) {
+            Some(serde_json::Value::String(s)) => return cut_chars(s, MSG_CHARS).to_owned(),
+            Some(v) if !v.is_null() => return cut_chars(&v.to_string(), MSG_CHARS).to_owned(),
+            _ => {}
+        }
+    }
+    String::new()
+}
+
+fn cut_chars(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
 
 /// The first non-empty line of a message, normalized.
 pub fn normalize(message: &str) -> String {
@@ -198,7 +246,9 @@ fn mask_inline(t: &str, out: &mut String) {
             i = j;
             continue;
         }
-        let ch = t[i..].chars().next().unwrap();
+        let Some(ch) = t.get(i..).and_then(|r| r.chars().next()) else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -260,6 +310,28 @@ mod tests {
         assert_eq!(normalize("  spaced   out  "), "spaced out");
         // Plain words made of hex letters stay.
         assert_eq!(normalize("decade facade accede"), "decade facade accede");
+    }
+
+    #[test]
+    fn group_message_has_one_input_path() {
+        let attrs = r#"{"error.message":{"code":7,"why":"bad"},"exception.type":"E"}"#;
+        assert_eq!(group_message(Some("boom"), Some(attrs)), "boom");
+        // A blank body falls back to attributes; objects come back as JSON text.
+        assert_eq!(
+            group_message(Some(" \n\t"), Some(attrs)),
+            r#"{"code":7,"why":"bad"}"#
+        );
+        assert_eq!(group_message(None, Some("not json")), "");
+        // Only the first MSG_CHARS characters count, so a body that is blank there is blank.
+        let late = format!("{}late text", " ".repeat(MSG_CHARS));
+        assert_eq!(
+            group_message(Some(&late), Some(attrs)),
+            r#"{"code":7,"why":"bad"}"#
+        );
+        let long = "é".repeat(MSG_CHARS + 10);
+        assert_eq!(group_message(Some(&long), None).chars().count(), MSG_CHARS);
+        // A non-breaking space is not blank to SQL's trim either.
+        assert_eq!(group_message(Some("\u{a0}"), Some(attrs)), "\u{a0}");
     }
 
     #[test]
