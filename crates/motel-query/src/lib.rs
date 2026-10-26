@@ -13,6 +13,7 @@ pub mod fingerprint;
 pub mod ids;
 mod render;
 mod searched;
+mod show;
 pub mod time;
 mod why;
 
@@ -22,6 +23,7 @@ use std::path::Path;
 use motel_store::{Reader, StoreError};
 
 pub use crate::searched::{Searched, Source};
+pub use crate::show::{ShowAnswer, ShowView, SHOW_LINE_CAP};
 pub use crate::time::{Since, Tz};
 pub use crate::why::{Finding, FindingKind, WhyAnswer, WhyArgs, WhyEmpty};
 
@@ -121,5 +123,10 @@ impl Query {
     /// `motel why [service]`.
     pub fn why(&self, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
         why::why(self, args)
+    }
+
+    /// `motel show <id>`; `full` lifts the 200-line cap.
+    pub fn show(&self, id: &str, full: bool) -> Result<ShowAnswer, QueryError> {
+        show::show(self, id, full)
     }
 }
