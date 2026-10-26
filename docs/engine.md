@@ -98,7 +98,7 @@ Process-wide: soft heap limit 18 MiB, hard 28 MiB. On `SQLITE_NOMEM` the writer 
 ### 2.3 Attributes
 
 - OTLP `AnyValue` maps to JSON as-is; int64 stays an integer, bytes become base64, dotted keys stay flat (`{"http.route": "/x"}`).
-- Rust builds canonical JSON and inserts it through `jsonb(?)`. If B1 shows the parse costs too much, we write JSONB bytes directly.
+- Rust encodes canonical JSON directly into SQLite's binary JSONB format with strict RFC 8259 validation (`direct_jsonb = true` by default), falling back to SQLite's `jsonb(?)` if the fast-path encoder declines an input.
 - The redactor runs first. `session_id`, `request_id`, trace IDs and error state are extracted in Rust at decode time, not by generated columns.
 - A field promoted later is a generated virtual column plus index, added when the next day file is created; the union view gives older files `NULL`.
 - A scalar function `attr(attrs, 'http.route')` hides JSON-path quoting from callers.
@@ -145,7 +145,7 @@ Decode, normalize, redact and intern, then reserve queue bytes and `try_send((ro
 
 One OS thread owns the only write connection to the hot file and to `evidence.sqlite`. It commits when the oldest row in the transaction is **50 ms** old, or at **2,048 rows** or **1 MiB** (100 ms is an alternative evaluated by B4). Each transaction is `BEGIN IMMEDIATE`, insert rows, upsert resources, update cursors and `_meta`, `COMMIT`, with no network waits inside.
 
-A separate **checkpointer connection** runs `PASSIVE` every second once the WAL passes 4 MiB, and `RESTART` at 64 MiB. No timer runs at idle.
+A separate **checkpointer connection** runs `PASSIVE` every second once the WAL passes 4 MiB (or immediately per 8 MiB of burst growth) and `TRUNCATE` under the writer's transaction lock at 32 MiB. No timer runs at idle. To enforce the **64 MiB hard WAL cap** (`wal_hard_cap_bytes`) under sustained bursts or long-lived readers, the writer checks `.hot.sqlite-wal` between transactions: if the WAL reaches the hard trigger threshold (52 MiB for a 64 MiB cap), the writer stops draining the 4 MiB ingest queue (causing queue backpressure → 429s for HTTP callers and blocking for tailers) and runs `PASSIVE` + `TRUNCATE` between transactions, waiting up to the reader progress-handler deadline (`query_deadline`) if an active reader holds an older WAL snapshot.
 
 ### 3.3 Acknowledgement and durability
 

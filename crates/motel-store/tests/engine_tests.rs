@@ -85,6 +85,10 @@ fn sqlite_version_floor_and_compile_options() {
         opts.iter().any(|o| o == "OMIT_LOAD_EXTENSION"),
         "expected OMIT_LOAD_EXTENSION in {opts:?}"
     );
+    assert!(
+        opts.iter().any(|o| o == "ENABLE_MEMORY_MANAGEMENT"),
+        "expected ENABLE_MEMORY_MANAGEMENT in {opts:?}"
+    );
 }
 
 #[test]
@@ -1016,4 +1020,242 @@ fn should_fixes_isolation_oversized_blocking_strict_jsonb_limits_and_uri_encodin
 
     drop(store);
     let _ = fs::remove_dir_all(&base_dir);
+}
+
+#[test]
+fn test_wal_hard_cap_under_stalled_reader() {
+    let dir = temp_test_dir("wal_hard_cap_stalled_reader");
+    let day0_ns = 1_777_075_200_000_000_000i64; // 2026-04-25T00:00:00Z
+    let clock = Arc::new(ManualClock::new(day0_ns));
+
+    let mut cfg = StoreConfig::new(&dir);
+    // Set a 1.5 MiB hard WAL cap and a 64 KiB queue budget so queue backpressure engages
+    // quickly while the writer pauses queue draining at the WAL hard trigger (~1.125 MiB).
+    cfg.wal_hard_cap_bytes = 1_536 * 1024;
+    cfg.queue_byte_budget = 64 * 1024;
+    cfg.group_commit_interval = Duration::from_millis(5);
+    cfg.group_commit_max_rows = 256;
+    cfg.query_deadline = Duration::from_millis(350);
+
+    let store = Store::open_with_clock(cfg, clock).expect("open store");
+    let writer = store.writer().clone();
+    let reader = Arc::new(store.reader());
+
+    // Seed an initial batch so the hot file and `events` table have rows.
+    let seed: Vec<Event> = (0..64)
+        .map(|i| sample_event(day0_ns + i * 1_000, "svc-wal", EventKind::Span, false))
+        .collect();
+    writer.submit(seed).unwrap().wait().unwrap();
+
+    // Push enough batches (~1.2 MiB of WAL frames across B-tree indexes) to cross the hard trigger.
+    let make_fat_batch = |batch_idx: i64| -> Vec<Event> {
+        (0..120)
+            .map(|i| {
+                let seq = batch_idx * 1_000 + i;
+                let mut ev = sample_event(day0_ns + seq * 1_000, "svc-wal", EventKind::Span, false);
+                ev.body = Some("x".repeat(220));
+                ev.attrs = Some(format!(
+                    r#"{{"http.route":"/api/v1/items/{seq}","seq":{seq},"pad":"{}"}}"#,
+                    "p".repeat(120)
+                ));
+                ev
+            })
+            .collect()
+    };
+
+    // Start a stalled reader on a background thread that holds a WAL snapshot on the hot file
+    // until the progress-handler deadline (350 ms) aborts it.
+    let reader_bg = Arc::clone(&reader);
+    let (reader_started_tx, reader_started_rx) = std::sync::mpsc::channel();
+    let reader_handle = std::thread::spawn(move || {
+        let _ = reader_started_tx.send(());
+        reader_bg.sql(
+            "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM r WHERE x < 200000000)
+             SELECT sum(x) + (SELECT count(*) FROM events) FROM r",
+            None,
+        )
+    });
+    reader_started_rx.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+
+    // Enqueue batches until the WAL reaches the hard trigger and the writer pauses queue drain
+    // while waiting for the stalled reader's snapshot to be released by its deadline.
+    let mut acks = Vec::new();
+    let mut saw_queue_full = false;
+    for b in 1..=18 {
+        let batch = make_fat_batch(b);
+        match writer.submit(batch.clone()) {
+            Ok(ack) => {
+                // Wait on the first few batches so the WAL builds up while the reader holds the snapshot;
+                // once near the cap, enqueue without waiting to observe queue backpressure (429).
+                if b <= 8 {
+                    ack.wait().expect("commit batch");
+                } else {
+                    acks.push(ack);
+                }
+            }
+            Err(SubmitError::QueueFull { .. }) => {
+                saw_queue_full = true;
+                // Tailer path blocks until the stalled reader's deadline releases the snapshot
+                // and the writer truncates the WAL and resumes draining.
+                let ack = writer
+                    .submit_blocking(batch, Vec::new())
+                    .expect("blocking enqueue after WAL reset");
+                acks.push(ack);
+                break;
+            }
+            Err(e) => panic!("unexpected enqueue error: {e}"),
+        }
+    }
+
+    for ack in acks {
+        ack.wait().expect("commit queued batch after reader deadline");
+    }
+
+    let reader_res = reader_handle.join().expect("reader thread join");
+    assert!(
+        matches!(reader_res, Err(StoreError::QueryDeadlineExceeded)),
+        "expected stalled reader to abort with QueryDeadlineExceeded, got {reader_res:?}"
+    );
+    assert!(
+        saw_queue_full,
+        "expected queue backpressure (QueueFull / 429) while writer paused queue drain at WAL cap"
+    );
+
+    writer.flush().expect("flush writer");
+
+    // Verify that the hard WAL cap (1.5 MiB) was never exceeded even though 12+ batches (~1.8 MiB
+    // of total WAL frames) were written while the stalled reader held its snapshot, and that after
+    // the reader's deadline released the snapshot, the WAL truncated and only holds the post-reset tail.
+    let peak_wal = writer.metrics().wal_peak_bytes.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        peak_wal <= 1_536 * 1024,
+        "expected peak WAL bytes ({peak_wal}) <= hard cap (1.5 MiB)"
+    );
+    let wal_path = dir.join("days").join("2026-04-25.hot.sqlite-wal");
+    let final_wal_bytes = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    assert!(
+        final_wal_bytes < 512 * 1024,
+        "expected final WAL bytes ({final_wal_bytes}) to reflect post-reset tail (< 512 KiB)"
+    );
+
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_direct_jsonb_default_and_fallback() {
+    let dir = temp_test_dir("direct_jsonb_default");
+    let day0_ns = 1_777_075_200_000_000_000i64;
+    let clock = Arc::new(ManualClock::new(day0_ns));
+    let cfg = StoreConfig::new(&dir);
+    assert!(cfg.direct_jsonb, "direct_jsonb should default to true");
+
+    let store = Store::open_with_clock(cfg, clock).expect("open store");
+    let writer = store.writer();
+    let reader = store.reader();
+
+    // 1. Normal event with direct_jsonb=true.
+    let mut ev1 = sample_event(day0_ns + 1_000, "svc-jsonb", EventKind::Log, false);
+    ev1.attrs = Some(r#"{"http.route":"/v1/fast","status":200}"#.to_owned());
+
+    // 2. Valid JSON with nesting depth 140 (> 128 fast-path limit in `encode_json_str_to_jsonb_buf`,
+    // which exercises `sqlite_jsonb_fallback` to SQLite's `jsonb(?)`).
+    let mut ev2 = sample_event(day0_ns + 2_000, "svc-jsonb", EventKind::Log, false);
+    ev2.attrs = Some(format!(
+        r#"{{"deep":{}"ok"{},"http.route":"/v1/deep"}}"#,
+        "[".repeat(140),
+        "]".repeat(140)
+    ));
+
+    writer
+        .submit(vec![ev1, ev2])
+        .unwrap()
+        .wait()
+        .expect("valid batches should commit via direct_jsonb + fallback");
+
+    let mut bad_ev = sample_event(day0_ns + 3_000, "svc-jsonb", EventKind::Log, false);
+    bad_ev.attrs = Some(r#"{"unterminated": 123"#.to_owned());
+    let bad_res = writer.submit(vec![bad_ev]).unwrap().wait();
+    assert!(
+        bad_res.is_err(),
+        "invalid JSON must still be rejected when direct_jsonb=true"
+    );
+
+    let hits = reader
+        .by_attr(
+            "http.route",
+            "/v1/fast",
+            10,
+            Some(TimeWindow::new(day0_ns, day0_ns + 10_000)),
+        )
+        .unwrap();
+    assert_eq!(hits.rows.len(), 1);
+
+    let deep_hits = reader
+        .by_attr(
+            "http.route",
+            "/v1/deep",
+            10,
+            Some(TimeWindow::new(day0_ns, day0_ns + 10_000)),
+        )
+        .unwrap();
+    assert_eq!(deep_hits.rows.len(), 1);
+
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_idle_shrink_releases_writer_cache_and_allocator_pages() {
+    let dir = temp_test_dir("idle_shrink_memory");
+    let day0_ns = 1_777_075_200_000_000_000i64;
+    let clock = Arc::new(ManualClock::new(day0_ns));
+    let mut cfg = StoreConfig::new(&dir);
+    // Keep checkpointer from auto-truncating so the writer connection retains its dirty/clean
+    // page cache until `shrink_memory()` runs.
+    cfg.wal_hard_cap_bytes = 64 * 1024 * 1024;
+    cfg.group_commit_interval = Duration::from_millis(5);
+
+    let store = Store::open_with_clock(cfg, clock).expect("open store");
+    let writer = store.writer();
+
+    for b in 0..10i64 {
+        let batch: Vec<Event> = (0..500)
+            .map(|i| {
+                let seq = b * 500 + i;
+                let mut ev =
+                    sample_event(day0_ns + seq * 1_000, "svc-shrink", EventKind::Span, false);
+                ev.body = Some("y".repeat(300));
+                ev.attrs = Some(format!(
+                    r#"{{"http.route":"/api/v1/shrink/{seq}","seq":{seq},"pad":"{}"}}"#,
+                    "z".repeat(160)
+                ));
+                ev
+            })
+            .collect();
+        writer.submit(batch).unwrap().wait().unwrap();
+    }
+    writer.flush().unwrap();
+
+    let used_before = motel_store::sqlite_memory_used_bytes();
+    assert!(
+        used_before > 1_000_000,
+        "expected writer page cache to hold > 1 MB before idle shrink, got {used_before}"
+    );
+
+    writer.shrink_memory().expect("shrink_memory");
+
+    let used_after = motel_store::sqlite_memory_used_bytes();
+    assert!(
+        used_after < 512 * 1024,
+        "expected SQLite memory used after idle shrink ({used_after}) < 512 KiB (was {used_before})"
+    );
+
+    let wal_path = dir.join("days").join("2026-04-25.hot.sqlite-wal");
+    let wal_bytes = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(wal_bytes, 0, "expected idle shrink to truncate WAL to 0 bytes");
+
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
 }

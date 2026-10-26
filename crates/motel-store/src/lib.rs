@@ -28,7 +28,8 @@ pub use crate::schema::{
 };
 pub use crate::seal::seal_day_file;
 pub use crate::writer::{
-    current_process_cpu_ns, current_thread_cpu_ns, expire_evidence_rows, query_latest_cursor, Ack,
+    current_process_cpu_ns, current_thread_cpu_ns, expire_evidence_rows, query_latest_cursor,
+    release_allocator_pressure, sqlite_memory_highwater_bytes, sqlite_memory_used_bytes, Ack,
     ManualClock, Writer, WriterMetrics,
 };
 
@@ -360,15 +361,19 @@ pub struct StoreConfig {
     pub with_ix_req: bool,
     /// Split `body` and `attrs` into a separate `payloads` table (default false = wide `events`, §8 B1).
     pub payloads_split: bool,
-    /// Encode JSONB directly in Rust rather than SQLite `jsonb(?)` (default false = `jsonb(?)`, §2.3).
+    /// Encode JSONB directly in Rust with strict RFC 8259 validation rather than SQLite `jsonb(?)`
+    /// (default true, `docs/engine.md` §2.3, §8).
     pub direct_jsonb: bool,
-    /// Queue byte budget before returning 429 (default 4 MiB, engine.md §3.1).
+    /// Queue byte budget before returning 429 (default 4 MiB, `docs/engine.md` §3.1).
     pub queue_byte_budget: usize,
-    /// Group commit time window (default 50 ms, engine.md §3.2).
+    /// Hard upper bound on `.hot.sqlite-wal` bytes before the writer pauses queue draining and
+    /// forces a checkpoint reset between transactions (default 64 MiB, `docs/engine.md` §3.2).
+    pub wal_hard_cap_bytes: u64,
+    /// Group commit time window (default 50 ms, `docs/engine.md` §3.2).
     pub group_commit_interval: Duration,
-    /// Group commit row threshold (default 2,048 rows, engine.md §3.2).
+    /// Group commit row threshold (default 2,048 rows, `docs/engine.md` §3.2).
     pub group_commit_max_rows: usize,
-    /// Group commit byte threshold (default 1 MiB, engine.md §3.2).
+    /// Group commit byte threshold (default 1 MiB, `docs/engine.md` §3.2).
     pub group_commit_max_bytes: usize,
     /// Default reader progress-handler deadline (default 2 s, max 10 s, `docs/engine.md` §4).
     pub query_deadline: Duration,
@@ -389,8 +394,9 @@ impl StoreConfig {
             page_size: 4096,
             with_ix_req: true,
             payloads_split: false,
-            direct_jsonb: false,
+            direct_jsonb: true,
             queue_byte_budget: 4 * 1024 * 1024,
+            wal_hard_cap_bytes: 64 * 1024 * 1024,
             group_commit_interval: Duration::from_millis(50),
             group_commit_max_rows: 2_048,
             group_commit_max_bytes: 1_048_576,

@@ -402,6 +402,8 @@ struct B1Report {
     with_ix_req: bool,
     payloads_split: bool,
     direct_jsonb: bool,
+    bursts: usize,
+    burst_rate_rows_per_sec: usize,
     steady_trickle: SteadyStats,
     slope: SlopeSummary,
     chunks_100k: Vec<ChunkStats>,
@@ -515,9 +517,16 @@ fn main() {
     let payloads_split: bool = get_arg(&args, "payloads-split", "false")
         .parse()
         .unwrap_or(false);
-    let direct_jsonb: bool = get_arg(&args, "direct-jsonb", "false")
+    let direct_jsonb: bool = get_arg(&args, "direct-jsonb", "true")
         .parse()
-        .unwrap_or(false);
+        .unwrap_or(true);
+    let bursts: usize = get_arg(&args, "bursts", "10").parse().unwrap_or(10).max(1);
+    let burst_rate: usize = get_arg(&args, "burst-rate", "50000")
+        .parse()
+        .unwrap_or(50_000);
+    let burst_gap_ms: u64 = get_arg(&args, "burst-gap-ms", "200")
+        .parse()
+        .unwrap_or(200);
     let steady_secs: u64 = get_arg(&args, "steady-secs", "5").parse().unwrap_or(5);
     let idle_secs: u64 = get_arg(&args, "idle-secs", "32").parse().unwrap_or(32);
     let out_file = get_arg(&args, "out", "");
@@ -635,17 +644,20 @@ fn main() {
     metrics.peak_queued_bytes.store(0, Ordering::SeqCst);
     metrics.wal_peak_bytes.store(0, Ordering::SeqCst);
 
-    // Phase 2: Main B1 load (seed 12345) in 500-row batches, pipelined up to 6 in-flight batches
-    // so group commit (2,048 rows / 1 MiB) exercises full batching without exceeding 4 MiB queue.
+    // Phase 2: Main B1 load (seed 12345) in 500-row batches across `bursts` bursts (default 10)
+    // paced at `burst_rate` rows/s (default 50,000 rows/s, docs/engine.md §8).
     let mut gen = FixtureGenerator::new(12345, total_rows, batch_size, t0_ns);
     let mut inflight: VecDeque<(Ack, Instant)> = VecDeque::with_capacity(8);
     let max_inflight = 4usize;
+    let rows_per_burst = (total_rows / bursts).max(batch_size);
 
     let load_wall_start = Instant::now();
     let load_proc_cpu_start = process_cpu_ns();
     let mut total_gen_cpu_ns = 0u64;
 
     let mut chunk_rows = 0usize;
+    let mut burst_rows = 0usize;
+    let mut burst_start = Instant::now();
     let mut completed_rows = 0usize;
     let mut chunk_wall_start = Instant::now();
     let mut chunk_proc_cpu_start = process_cpu_ns();
@@ -664,6 +676,15 @@ fn main() {
         chunk_gen_cpu_ns += gd;
         b
     } {
+        if burst_rate > 0 && burst_rows > 0 {
+            let target_elapsed =
+                Duration::from_secs_f64((burst_rows as f64) / (burst_rate as f64));
+            let now_elapsed = burst_start.elapsed();
+            if now_elapsed < target_elapsed {
+                thread::sleep(target_elapsed - now_elapsed);
+            }
+        }
+
         let row_cnt = batch.len();
         let mut current_batch = Some(batch);
         while let Some(b) = current_batch.take() {
@@ -694,6 +715,7 @@ fn main() {
 
         completed_rows += row_cnt;
         chunk_rows += row_cnt;
+        burst_rows += row_cnt;
 
         if chunk_rows >= 100_000 {
             while let Some((ack, t_sub)) = inflight.pop_front() {
@@ -723,6 +745,14 @@ fn main() {
                 insert_cpu_sec_per_100k: ins_cpu_s,
                 checkpoint_cpu_sec_per_100k: ckpt_cpu_s,
             });
+
+            if burst_rows >= rows_per_burst && completed_rows < total_rows {
+                if burst_gap_ms > 0 {
+                    thread::sleep(Duration::from_millis(burst_gap_ms));
+                }
+                burst_rows = 0;
+                burst_start = Instant::now();
+            }
 
             chunk_rows = 0;
             chunk_gen_cpu_ns = 0;
@@ -867,6 +897,8 @@ fn main() {
         with_ix_req,
         payloads_split,
         direct_jsonb,
+        bursts,
+        burst_rate_rows_per_sec: burst_rate,
         steady_trickle: steady_stats,
         slope,
         chunks_100k,

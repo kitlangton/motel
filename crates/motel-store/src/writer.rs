@@ -81,6 +81,11 @@ extern "C" {
     fn malloc_zone_pressure_relief(zone: *mut core::ffi::c_void, goal: usize) -> usize;
 }
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+extern "C" {
+    fn malloc_trim(pad: usize) -> libc::c_int;
+}
+
 /// Measure current thread CPU time in nanoseconds on macOS (or 0 on unsupported targets).
 #[inline]
 pub fn current_thread_cpu_ns() -> u64 {
@@ -107,12 +112,30 @@ pub fn current_process_cpu_ns() -> u64 {
     }
 }
 
+/// Return unused allocator pages to the OS (`malloc_zone_pressure_relief(NULL, 0)` on macOS,
+/// `malloc_trim(0)` on Linux glibc).
 #[inline]
-fn release_allocator_pressure() {
+pub fn release_allocator_pressure() {
     #[cfg(target_os = "macos")]
     unsafe {
         malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
     }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        let _ = malloc_trim(0);
+    }
+}
+
+/// Return the number of bytes currently checked out from SQLite's allocator (`sqlite3_memory_used`).
+#[inline]
+pub fn sqlite_memory_used_bytes() -> i64 {
+    unsafe { rusqlite::ffi::sqlite3_memory_used() }
+}
+
+/// Return the high-water mark of bytes checked out from SQLite's allocator (`sqlite3_memory_highwater`).
+#[inline]
+pub fn sqlite_memory_highwater_bytes(reset: bool) -> i64 {
+    unsafe { rusqlite::ffi::sqlite3_memory_highwater(i32::from(reset)) }
 }
 
 struct AckShared {
@@ -242,17 +265,20 @@ enum WriterCmd {
     Batch(BatchMsg),
     Flush(Sender<Result<(), StoreError>>),
     WaitSeals(Sender<()>),
+    ShrinkMemory(Sender<()>),
     Shutdown(Sender<()>),
 }
 
 enum CheckpointerCmd {
     NotifyWalSize(u64),
+    IdleShrink(Sender<()>),
     Stop(Sender<()>),
 }
 
 struct CheckpointerHandle {
     tx: Sender<CheckpointerCmd>,
     tx_lock: Arc<Mutex<()>>,
+    ckpt_lock: Arc<Mutex<()>>,
     bytes_since_reset: Arc<AtomicU64>,
     join: Option<JoinHandle<()>>,
 }
@@ -261,12 +287,15 @@ impl CheckpointerHandle {
     fn spawn(
         hot_path: PathBuf,
         page_size: u32,
+        wal_hard_cap_bytes: u64,
         metrics: Arc<WriterMetrics>,
     ) -> Result<Self, StoreError> {
         let (tx, rx) = crossbeam_channel::unbounded::<CheckpointerCmd>();
         let tx_lock = Arc::new(Mutex::new(()));
+        let ckpt_lock = Arc::new(Mutex::new(()));
         let bytes_since_reset = Arc::new(AtomicU64::new(0));
         let lock_clone = Arc::clone(&tx_lock);
+        let ckpt_clone = Arc::clone(&ckpt_lock);
         let bytes_clone = Arc::clone(&bytes_since_reset);
         let join = thread::Builder::new()
             .name("motel-ckpt".to_owned())
@@ -274,9 +303,11 @@ impl CheckpointerHandle {
                 checkpointer_loop(
                     hot_path,
                     page_size,
+                    wal_hard_cap_bytes,
                     rx,
                     metrics,
                     lock_clone,
+                    ckpt_clone,
                     bytes_clone,
                 )
             })
@@ -284,18 +315,23 @@ impl CheckpointerHandle {
         Ok(Self {
             tx,
             tx_lock,
+            ckpt_lock,
             bytes_since_reset,
             join: Some(join),
         })
     }
 
-    fn record_commit_bytes(&self, commit_bytes: u64) {
-        let cur = self
-            .bytes_since_reset
-            .fetch_add(commit_bytes, Ordering::Relaxed)
-            + commit_bytes;
-        if cur >= 4 * 1024 * 1024 {
-            let _ = self.tx.send(CheckpointerCmd::NotifyWalSize(cur));
+    fn notify_wal_bytes(&self, wal_bytes: u64, passive_threshold: u64) {
+        self.bytes_since_reset.store(wal_bytes, Ordering::Relaxed);
+        if wal_bytes >= passive_threshold {
+            let _ = self.tx.send(CheckpointerCmd::NotifyWalSize(wal_bytes));
+        }
+    }
+
+    fn idle_shrink(&self) {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        if self.tx.send(CheckpointerCmd::IdleShrink(tx)).is_ok() {
+            let _ = rx.recv_timeout(Duration::from_secs(2));
         }
     }
 
@@ -309,16 +345,21 @@ impl CheckpointerHandle {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn checkpointer_loop(
     hot_path: PathBuf,
     page_size: u32,
+    wal_hard_cap_bytes: u64,
     rx: Receiver<CheckpointerCmd>,
     metrics: Arc<WriterMetrics>,
     tx_lock: Arc<Mutex<()>>,
+    ckpt_lock: Arc<Mutex<()>>,
     bytes_since_reset: Arc<AtomicU64>,
 ) {
-    const WAL_PASSIVE_THRESHOLD: u64 = 4 * 1024 * 1024; // 4 MiB (docs/engine.md §3.2)
-    const WAL_RESTART_THRESHOLD: u64 = 64 * 1024 * 1024; // 64 MiB (docs/engine.md §3.2)
+    let wal_passive_threshold: u64 = (4 * 1024 * 1024).min(wal_hard_cap_bytes / 4).max(64 * 1024);
+    let wal_restart_threshold: u64 = (wal_hard_cap_bytes / 2)
+        .clamp(wal_passive_threshold, 32 * 1024 * 1024);
+    let burst_step_bytes: u64 = (8 * 1024 * 1024).min(wal_restart_threshold / 2).max(64 * 1024);
 
     let frame_bytes = u64::from(page_size.max(512)) + 24;
     let mut conn: Option<Connection> = None;
@@ -331,13 +372,18 @@ fn checkpointer_loop(
 
     loop {
         let cur_tracked = bytes_since_reset.load(Ordering::Relaxed);
-        let writer_active =
-            cur_tracked >= WAL_PASSIVE_THRESHOLD && (has_uncheckpointed || cur_tracked > last_checked_bytes);
+        let writer_active = cur_tracked >= wal_passive_threshold
+            && (has_uncheckpointed || cur_tracked > last_checked_bytes);
         // Block indefinitely on rx.recv() when idle; run a 1 s timer (or 100 ms backoff)
         // while active with WAL >= 4 MiB (docs/engine.md §3.2).
         let notified_bytes = if !writer_active && !restart_backoff {
             match rx.recv() {
                 Ok(CheckpointerCmd::NotifyWalSize(b)) => b,
+                Ok(CheckpointerCmd::IdleShrink(ack)) => {
+                    drop(conn.take());
+                    let _ = ack.send(());
+                    continue;
+                }
                 Ok(CheckpointerCmd::Stop(ack)) => {
                     drop(conn);
                     let _ = ack.send(());
@@ -353,6 +399,11 @@ fn checkpointer_loop(
             };
             match rx.recv_timeout(wait_dur) {
                 Ok(CheckpointerCmd::NotifyWalSize(b)) => b,
+                Ok(CheckpointerCmd::IdleShrink(ack)) => {
+                    drop(conn.take());
+                    let _ = ack.send(());
+                    continue;
+                }
                 Ok(CheckpointerCmd::Stop(ack)) => {
                     drop(conn);
                     let _ = ack.send(());
@@ -368,6 +419,10 @@ fn checkpointer_loop(
         while let Ok(next) = rx.try_recv() {
             match next {
                 CheckpointerCmd::NotifyWalSize(b) => wal_bytes = b,
+                CheckpointerCmd::IdleShrink(ack) => {
+                    drop(conn.take());
+                    let _ = ack.send(());
+                }
                 CheckpointerCmd::Stop(ack) => {
                     drop(conn);
                     let _ = ack.send(());
@@ -377,14 +432,20 @@ fn checkpointer_loop(
         }
 
         let active_bytes = bytes_since_reset.load(Ordering::Relaxed).max(wal_bytes);
-        if active_bytes < WAL_PASSIVE_THRESHOLD {
+        if active_bytes < wal_passive_threshold {
             restart_backoff = false;
             has_uncheckpointed = false;
             last_checked_bytes = active_bytes;
             continue;
         }
-        let is_over_restart = active_bytes >= WAL_RESTART_THRESHOLD;
-        if !is_over_restart && !restart_backoff && last_passive.elapsed() < Duration::from_secs(1) {
+        let is_over_restart = active_bytes >= wal_restart_threshold;
+        let grew_by_burst_step =
+            active_bytes.saturating_sub(last_checked_bytes) >= burst_step_bytes;
+        if !is_over_restart
+            && !grew_by_burst_step
+            && !restart_backoff
+            && last_passive.elapsed() < Duration::from_secs(1)
+        {
             has_uncheckpointed = true;
             continue;
         }
@@ -401,6 +462,7 @@ fn checkpointer_loop(
 
         if let Some(c) = &conn {
             let cpu0 = current_thread_cpu_ns();
+            let _ckpt_guard = ckpt_lock.lock().unwrap();
             // First run PASSIVE concurrently with the writer so bulk frames are copied
             // without blocking writer commits.
             let passive_res: Result<(i64, i64, i64), _> =
@@ -410,28 +472,31 @@ fn checkpointer_loop(
             if let Ok((p_busy, log_frames, ckpt_frames)) = passive_res {
                 let actual_wal_bytes = (log_frames.max(0) as u64) * frame_bytes;
                 metrics.update_peak_wal(actual_wal_bytes);
-                has_uncheckpointed = log_frames > ckpt_frames;
+                let mut unckpt_frames = (log_frames - ckpt_frames).max(0);
+                has_uncheckpointed = unckpt_frames > 0;
 
-                if actual_wal_bytes >= WAL_RESTART_THRESHOLD {
+                if actual_wal_bytes >= wal_restart_threshold {
                     // If the writer appended frames while PASSIVE was running, run one more
-                    // PASSIVE pass outside tx_lock so RESTART holds tx_lock as briefly as possible.
+                    // PASSIVE pass outside tx_lock so TRUNCATE holds tx_lock as briefly as possible.
                     let mut ready_for_restart = p_busy == 0;
-                    if ready_for_restart && (log_frames - ckpt_frames) > 256 {
+                    if ready_for_restart && unckpt_frames > 256 {
                         if let Ok((b2, l2, c2)) =
                             c.query_row("PRAGMA wal_checkpoint(PASSIVE);", [], |r| {
                                 Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
                             })
                         {
                             ready_for_restart = b2 == 0;
-                            has_uncheckpointed = l2 > c2;
+                            unckpt_frames = (l2 - c2).max(0);
+                            has_uncheckpointed = unckpt_frames > 0;
                         }
                     }
 
-                    // Only attempt RESTART under tx_lock if PASSIVE was not blocked by an older reader.
-                    if ready_for_restart {
+                    // Attempt TRUNCATE under tx_lock if PASSIVE was not blocked by an older reader
+                    // and the remaining uncheckpointed tail is small (<= 512 frames = ~2 MiB).
+                    if ready_for_restart && unckpt_frames <= 512 {
                         let restart_res: Result<(i64, i64, i64), _> = {
                             let _guard = tx_lock.lock().unwrap();
-                            c.query_row("PRAGMA wal_checkpoint(RESTART);", [], |r| {
+                            c.query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |r| {
                                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                             })
                         };
@@ -567,6 +632,17 @@ impl Writer {
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.tx
             .send(WriterCmd::WaitSeals(tx))
+            .map_err(|_| StoreError::Closed)?;
+        rx.recv().map_err(|_| StoreError::Closed)
+    }
+
+    /// Trigger the 30 s idle memory shrink path immediately (`docs/engine.md` §5):
+    /// checkpoints WALs, shrinks writer/evidence page caches, closes idle readers,
+    /// calls `sqlite3_release_memory`, and returns freed pages to the OS allocator.
+    pub fn shrink_memory(&self) -> Result<(), StoreError> {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.tx
+            .send(WriterCmd::ShrinkMemory(tx))
             .map_err(|_| StoreError::Closed)?;
         rx.recv().map_err(|_| StoreError::Closed)
     }
@@ -890,8 +966,12 @@ impl WriterThreadState {
         }
 
         let hot = OpenTargetFile::open_hot_day(&config.root_dir, &active_day, &config, &catalog)?;
-        let checkpointer =
-            CheckpointerHandle::spawn(hot.path.clone(), config.page_size, Arc::clone(&metrics))?;
+        let checkpointer = CheckpointerHandle::spawn(
+            hot.path.clone(),
+            config.page_size,
+            config.wal_hard_cap_bytes,
+            Arc::clone(&metrics),
+        )?;
         let evidence = OpenTargetFile::open_evidence(&config.root_dir, &config, &catalog)?;
 
         let mut state = Self {
@@ -930,10 +1010,29 @@ impl WriterThreadState {
         let mut last_activity = Instant::now();
 
         loop {
-            // 1. Drain any immediately ready messages up to group commit thresholds.
+            // 1. If pending is empty and the WAL is at or above the hard trigger threshold,
+            // pause draining Batch commands from rx (so the 4 MiB queue applies backpressure)
+            // and reset the WAL between transactions (docs/engine.md §3.2).
             let mut flush_waiters: Vec<Sender<Result<(), StoreError>>> = Vec::new();
             let mut seal_waiters: Vec<Sender<()>> = Vec::new();
+            let mut shrink_waiters: Vec<Sender<()>> = Vec::new();
             let mut shutdown_waiters: Vec<Sender<()>> = Vec::new();
+
+            if pending.is_empty() && self.hot.wal_size_bytes() >= self.wal_hard_trigger_bytes() {
+                self.enforce_wal_hard_cap(&mut shutdown_waiters);
+                if !shutdown_waiters.is_empty() {
+                    self.drain_and_shutdown(
+                        &rx,
+                        &mut pending,
+                        &mut flush_waiters,
+                        &mut seal_waiters,
+                        &mut shutdown_waiters,
+                    );
+                    return;
+                }
+            }
+
+            // 1b. Drain any immediately ready messages up to group commit thresholds.
 
             while pending_rows < self.config.group_commit_max_rows
                 && pending_bytes < self.config.group_commit_max_bytes
@@ -955,6 +1054,10 @@ impl WriterThreadState {
                     }
                     Ok(WriterCmd::WaitSeals(tx)) => {
                         seal_waiters.push(tx);
+                        break;
+                    }
+                    Ok(WriterCmd::ShrinkMemory(tx)) => {
+                        shrink_waiters.push(tx);
                         break;
                     }
                     Ok(WriterCmd::Shutdown(tx)) => {
@@ -982,11 +1085,12 @@ impl WriterThreadState {
             }
 
             // 2. Decide whether to commit now.
-            let commit_now = !pending.is_empty()
+                let commit_now = !pending.is_empty()
                 && (pending_rows >= self.config.group_commit_max_rows
                     || pending_bytes >= self.config.group_commit_max_bytes
                     || !flush_waiters.is_empty()
                     || !seal_waiters.is_empty()
+                    || !shrink_waiters.is_empty()
                     || oldest_enqueue
                         .is_some_and(|t| t.elapsed() >= self.config.group_commit_interval));
 
@@ -1019,6 +1123,14 @@ impl WriterThreadState {
                 let _ = self.maybe_roll_day_and_heartbeat(false);
                 self.join_seals();
                 for tx in seal_waiters.drain(..) {
+                    let _ = tx.send(());
+                }
+            }
+
+            if !shrink_waiters.is_empty() {
+                self.shrink_idle_memory();
+                shrunk_since_idle = true;
+                for tx in shrink_waiters.drain(..) {
                     let _ = tx.send(());
                 }
             }
@@ -1084,6 +1196,18 @@ impl WriterThreadState {
                         self.join_seals();
                         let _ = tx.send(());
                     }
+                    Ok(WriterCmd::ShrinkMemory(tx)) => {
+                        if !pending.is_empty() {
+                            let _ = self.commit_group(&mut pending);
+                            debug_assert!(pending.is_empty());
+                            pending_rows = 0;
+                            pending_bytes = 0;
+                            oldest_enqueue = None;
+                        }
+                        self.shrink_idle_memory();
+                        shrunk_since_idle = true;
+                        let _ = tx.send(());
+                    }
                     Ok(WriterCmd::Shutdown(tx)) => {
                         shutdown_waiters.push(tx);
                         self.drain_and_shutdown(
@@ -1105,17 +1229,9 @@ impl WriterThreadState {
                             } else if !shrunk_since_idle
                                 && last_activity.elapsed() >= Duration::from_secs(30)
                             {
-                                // Shrink writer page cache and checkpoint evidence after 30 s idle (docs/engine.md §5).
-                                self.checkpoint_evidence();
-                                let _ = self.hot.conn.execute_batch("PRAGMA shrink_memory;");
-                                let _ = self.evidence.conn.execute_batch("PRAGMA shrink_memory;");
-                                let _ = self.hot.conn.release_memory();
-                                let _ = self.evidence.conn.release_memory();
-                                self.reader_pool.close_all();
-                                unsafe {
-                                    rusqlite::ffi::sqlite3_release_memory(i32::MAX);
-                                }
-                                release_allocator_pressure();
+                                // Shrink writer page cache, checkpoint WALs, and return freed memory to OS
+                                // after 30 s idle (docs/engine.md §5).
+                                self.shrink_idle_memory();
                                 shrunk_since_idle = true;
                             }
                         }
@@ -1147,6 +1263,11 @@ impl WriterThreadState {
                     Ok(WriterCmd::WaitSeals(tx)) => {
                         let _ = self.maybe_roll_day_and_heartbeat(false);
                         self.join_seals();
+                        let _ = tx.send(());
+                    }
+                    Ok(WriterCmd::ShrinkMemory(tx)) => {
+                        self.shrink_idle_memory();
+                        shrunk_since_idle = true;
                         let _ = tx.send(());
                     }
                     Ok(WriterCmd::Shutdown(tx)) => {
@@ -1195,6 +1316,9 @@ impl WriterThreadState {
                 }
                 WriterCmd::Flush(tx) => flush_waiters.push(tx),
                 WriterCmd::WaitSeals(tx) => seal_waiters.push(tx),
+                WriterCmd::ShrinkMemory(tx) => {
+                    let _ = tx.send(());
+                }
                 WriterCmd::Shutdown(tx) => shutdown_waiters.push(tx),
             }
         }
@@ -1231,6 +1355,136 @@ impl WriterThreadState {
         }
     }
 
+    fn wal_passive_threshold(&self) -> u64 {
+        (4 * 1024 * 1024)
+            .min(self.config.wal_hard_cap_bytes / 4)
+            .max(64 * 1024)
+    }
+
+    fn wal_hard_trigger_bytes(&self) -> u64 {
+        let cap = self.config.wal_hard_cap_bytes;
+        let headroom = (cap / 4).min(12 * 1024 * 1024);
+        cap.saturating_sub(headroom).max(4096)
+    }
+
+    /// Enforce the hard WAL bound between transactions (`docs/engine.md` §3.2):
+    /// While `wal_size_bytes() >= wal_hard_trigger_bytes()`, the writer pauses draining
+    /// `Batch` messages from `rx` (allowing the 4 MiB queue budget to fill and apply 429 /
+    /// blocking backpressure) and runs `PASSIVE` + `TRUNCATE` checkpoints.
+    /// If an active reader holds an older WAL snapshot (`busy != 0`), waits in 10 ms slices
+    /// up to `query_deadline + 250 ms` for the reader's progress-handler deadline to release
+    /// the snapshot, without ever deadlocking the writer thread.
+    fn enforce_wal_hard_cap(&mut self, shutdown_waiters: &mut Vec<Sender<()>>) {
+        let trigger = self.wal_hard_trigger_bytes();
+        let ckpt_lock = Arc::clone(&self.checkpointer.ckpt_lock);
+        let _ckpt_guard = ckpt_lock.lock().unwrap();
+
+        let cur_wal = self.hot.wal_size_bytes();
+        self.metrics.update_peak_wal(cur_wal);
+        if cur_wal < trigger {
+            return;
+        }
+
+        let start = Instant::now();
+        let max_wait = self
+            .config
+            .query_deadline
+            .max(Duration::from_millis(100))
+            .saturating_add(Duration::from_millis(250));
+
+        loop {
+            let cpu0 = current_thread_cpu_ns();
+            let _ = self.hot.conn.busy_timeout(Duration::ZERO);
+            let _ = self
+                .hot
+                .conn
+                .query_row("PRAGMA wal_checkpoint(PASSIVE);", [], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                });
+
+            let trunc_res: Result<(i64, i64, i64), _> = {
+                let tx_lock = Arc::clone(&self.checkpointer.tx_lock);
+                let _tx_guard = tx_lock.lock().unwrap();
+                self.hot
+                    .conn
+                    .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    })
+            };
+            let _ = self.hot.conn.busy_timeout(Duration::from_millis(5000));
+            let cpu_delta = current_thread_cpu_ns().saturating_sub(cpu0);
+            self.metrics
+                .checkpoint_cpu_ns
+                .fetch_add(cpu_delta, Ordering::Relaxed);
+
+            let wal_after = self.hot.wal_size_bytes();
+            self.metrics.update_peak_wal(wal_after);
+            self.checkpointer
+                .bytes_since_reset
+                .store(wal_after, Ordering::Relaxed);
+
+            if matches!(trunc_res, Ok((0, _, _))) || wal_after < trigger {
+                break;
+            }
+
+            // An active reader is holding an older WAL snapshot. Evict any idle pooled readers
+            // and wait briefly for the active reader's progress-handler deadline to release it.
+            self.reader_pool.evict_idle();
+            if start.elapsed() >= max_wait {
+                break;
+            }
+            if self.stop_sealers.load(Ordering::Acquire) {
+                let (tx, _) = crossbeam_channel::bounded(1);
+                shutdown_waiters.push(tx);
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn shrink_idle_memory(&mut self) {
+        self.checkpointer.idle_shrink();
+        let ckpt_lock = Arc::clone(&self.checkpointer.ckpt_lock);
+        let _ckpt_guard = ckpt_lock.lock().unwrap();
+        let tx_lock = Arc::clone(&self.checkpointer.tx_lock);
+        let _tx_guard = tx_lock.lock().unwrap();
+
+        self.checkpoint_evidence();
+        let _ = self.hot.conn.busy_timeout(Duration::ZERO);
+        let _ = self
+            .hot
+            .conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        let _ = self.hot.conn.busy_timeout(Duration::from_millis(5000));
+        let wal_after = self.hot.wal_size_bytes();
+        self.checkpointer
+            .bytes_since_reset
+            .store(wal_after, Ordering::Relaxed);
+
+        self.hot.conn.flush_prepared_statement_cache();
+        self.evidence.conn.flush_prepared_statement_cache();
+
+        // Lower cache_size before PRAGMA shrink_memory so pcache1EnforceMaxPage evicts cached
+        // pages down to <= 512 KiB, then restore the configured cache_size ceiling (docs/engine.md §5).
+        let _ = self.hot.conn.execute_batch(
+            "PRAGMA cache_size = -128;
+             PRAGMA shrink_memory;
+             PRAGMA cache_size = -8192;",
+        );
+        let _ = self.evidence.conn.execute_batch(
+            "PRAGMA cache_size = -128;
+             PRAGMA shrink_memory;
+             PRAGMA cache_size = -8192;",
+        );
+        let _ = self.hot.conn.release_memory();
+        let _ = self.evidence.conn.release_memory();
+        self.reader_pool.close_all();
+        unsafe {
+            rusqlite::ffi::sqlite3_release_memory(i32::MAX);
+        }
+        release_allocator_pressure();
+    }
+
     fn checkpoint_evidence(&mut self) {
         let _ = self.evidence.conn.busy_timeout(Duration::ZERO);
         let res: Result<(i64, i64, i64), _> =
@@ -1244,7 +1498,7 @@ impl WriterThreadState {
                 let _ = self
                     .evidence
                     .conn
-                    .execute_batch("PRAGMA wal_checkpoint(RESTART);");
+                    .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
             }
             self.evidence_bytes_since_ckpt = 0;
         }
@@ -1280,6 +1534,7 @@ impl WriterThreadState {
         let new_ckpt = CheckpointerHandle::spawn(
             new_hot.path.clone(),
             self.config.page_size,
+            self.config.wal_hard_cap_bytes,
             Arc::clone(&self.metrics),
         )?;
 
@@ -1417,7 +1672,6 @@ impl WriterThreadState {
         let mut ev_batch_indices: Vec<usize> = Vec::new();
         let mut hot_rows: Vec<&Event> = Vec::new();
         let mut hot_cursors: Vec<&CursorUpdate> = Vec::new();
-        let mut hot_bytes = 0usize;
 
         for (idx, b) in batches.iter().enumerate() {
             let mut b_has_hot = false;
@@ -1458,7 +1712,6 @@ impl WriterThreadState {
             }
             if b_has_hot {
                 hot_batch_indices.push(idx);
-                hot_bytes += b.bytes;
             }
             if b_has_ev {
                 ev_batch_indices.push(idx);
@@ -1498,7 +1751,8 @@ impl WriterThreadState {
                     }
                     let wal_bytes = self.hot.wal_size_bytes();
                     self.metrics.update_peak_wal(wal_bytes);
-                    self.checkpointer.record_commit_bytes(hot_bytes as u64);
+                    self.checkpointer
+                        .notify_wal_bytes(wal_bytes, self.wal_passive_threshold());
                     self.metrics.committed_txns.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e) if hot_batch_indices.len() <= 1 => {
@@ -1524,7 +1778,10 @@ impl WriterThreadState {
                             Ok(()) => {
                                 committed_hot_rows += b_rows.len() as u64;
                                 self.dirty_since_durable = !run_full_sync;
-                                self.checkpointer.record_commit_bytes(b.bytes as u64);
+                                let wal_bytes = self.hot.wal_size_bytes();
+                                self.metrics.update_peak_wal(wal_bytes);
+                                self.checkpointer
+                                    .notify_wal_bytes(wal_bytes, self.wal_passive_threshold());
                                 self.metrics.committed_txns.fetch_add(1, Ordering::Relaxed);
                             }
                             Err(err) => {
@@ -1756,7 +2013,13 @@ impl WriterThreadState {
                     batch_max_ts = batch_max_ts.max(ev.ts);
 
                     let res_id = match &ev.resource {
-                        Some(res) => Some(intern_resource(&target.conn, &mut target.lru, res)?),
+                        Some(res) => Some(intern_resource(
+                            &target.conn,
+                            &mut target.lru,
+                            res,
+                            self.config.direct_jsonb,
+                            &mut jsonb_buf,
+                        )?),
                         None => None,
                     };
 
@@ -1794,9 +2057,7 @@ impl WriterThreadState {
                         let jsonb_slice: Option<&[u8]> = match ev.attrs.as_deref() {
                             Some(s) => {
                                 if !encode_json_str_to_jsonb_buf(s, &mut jsonb_buf) {
-                                    return Err(rusqlite::Error::ToSqlConversionFailure(
-                                        "invalid JSON in event attrs".into(),
-                                    ));
+                                    sqlite_jsonb_fallback(&target.conn, s, &mut jsonb_buf)?;
                                 }
                                 Some(jsonb_buf.as_slice())
                             }
@@ -1935,29 +2196,64 @@ fn validate_batch_attrs(b: &BatchMsg, _direct_jsonb: bool) -> Result<(), String>
     Ok(())
 }
 
+fn sqlite_jsonb_fallback(conn: &Connection, s: &str, out: &mut Vec<u8>) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare_cached("SELECT jsonb(?1)")?;
+    let bytes: Vec<u8> = stmt.query_row(params![s], |r| r.get(0))?;
+    out.clear();
+    out.extend_from_slice(&bytes);
+    Ok(())
+}
+
 fn intern_resource(
     conn: &Connection,
     lru: &mut ResourceLru,
     res: &Resource,
+    direct_jsonb: bool,
+    jsonb_buf: &mut Vec<u8>,
 ) -> rusqlite::Result<i64> {
     let hash = res.canonical_hash();
     if let Some(id) = lru.get(&hash) {
         return Ok(id);
     }
 
-    let mut ins = conn.prepare_cached(
-        "INSERT INTO resources (hash, host, service, version, pid, attrs)
-         VALUES (?1, ?2, ?3, ?4, ?5, jsonb(?6))
-         ON CONFLICT(hash) DO NOTHING",
-    )?;
-    let changed = ins.execute(params![
-        &hash[..],
-        res.host.as_deref(),
-        res.service.as_str(),
-        res.version.as_deref(),
-        res.pid,
-        res.attrs.as_deref(),
-    ])?;
+    let changed = if direct_jsonb {
+        let jsonb_slice: Option<&[u8]> = match res.attrs.as_deref() {
+            Some(s) => {
+                if !encode_json_str_to_jsonb_buf(s, jsonb_buf) {
+                    sqlite_jsonb_fallback(conn, s, jsonb_buf)?;
+                }
+                Some(jsonb_buf.as_slice())
+            }
+            None => None,
+        };
+        let mut ins = conn.prepare_cached(
+            "INSERT INTO resources (hash, host, service, version, pid, attrs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(hash) DO NOTHING",
+        )?;
+        ins.execute(params![
+            &hash[..],
+            res.host.as_deref(),
+            res.service.as_str(),
+            res.version.as_deref(),
+            res.pid,
+            jsonb_slice,
+        ])?
+    } else {
+        let mut ins = conn.prepare_cached(
+            "INSERT INTO resources (hash, host, service, version, pid, attrs)
+             VALUES (?1, ?2, ?3, ?4, ?5, jsonb(?6))
+             ON CONFLICT(hash) DO NOTHING",
+        )?;
+        ins.execute(params![
+            &hash[..],
+            res.host.as_deref(),
+            res.service.as_str(),
+            res.version.as_deref(),
+            res.pid,
+            res.attrs.as_deref(),
+        ])?
+    };
 
     let id = if changed > 0 {
         conn.last_insert_rowid()
