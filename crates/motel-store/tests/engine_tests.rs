@@ -681,3 +681,339 @@ fn ad_hoc_sql_sandbox_authorizer_and_read_only_cli_while_writer_runs() {
     drop(store);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn blocker_1_shutdown_drains_queued_batches_and_injected_commit_failure_acks_err() {
+    let dir = temp_test_dir("blocker1-acks");
+    let t0 = 1_792_886_400 * NS_PER_SECOND;
+    let clock = Arc::new(ManualClock::new(t0));
+
+    let mut cfg = StoreConfig::new(&dir);
+    cfg.group_commit_interval = Duration::from_millis(50);
+    cfg.group_commit_max_rows = 16;
+
+    let store = Store::open_with_clock(cfg.clone(), clock.clone()).unwrap();
+    let writer = store.writer();
+
+    // 1. Inject a group commit failure: every pending batch in that group must receive Err,
+    // queue bytes must return to 0, and subsequent batches must still commit normally.
+    cfg.fail_next_commits
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let fail_ack1 = writer
+        .submit(vec![sample_event(t0 + 1, "api", EventKind::Log, false)])
+        .unwrap();
+    let fail_ack2 = writer
+        .submit(vec![sample_event(t0 + 2, "api", EventKind::Log, false)])
+        .unwrap();
+    assert!(fail_ack1.wait().is_err());
+    assert!(fail_ack2.wait().is_err());
+    assert_eq!(
+        writer
+            .metrics()
+            .queued_bytes
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
+
+    // Subsequent batch succeeds after the injected failure.
+    let ok_ack = writer
+        .submit(vec![sample_event(t0 + 3, "api", EventKind::Log, false)])
+        .unwrap();
+    assert_eq!(ok_ack.wait().unwrap().rows_committed, 1);
+
+    // 2. Enqueue more batches than `group_commit_max_rows` (16) and immediately drop `Store`:
+    // Shutdown must drain the entire channel and resolve every Ack without hanging.
+    let mut shutdown_acks = Vec::new();
+    for i in 0..40 {
+        let ev = sample_event(t0 + 100 + i, "api", EventKind::Span, false);
+        shutdown_acks.push(writer.submit(vec![ev]).unwrap());
+    }
+    drop(store);
+
+    for ack in shutdown_acks {
+        let committed = ack.wait().expect("queued batch must commit before shutdown");
+        assert_eq!(committed.rows_committed, 1);
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn blocker_2_external_reader_holding_wal_never_quarantines_and_corrupt_preserves_wal() {
+    let dir = temp_test_dir("blocker2-recovery-busy");
+    let day1_ts = 1_792_886_400 * NS_PER_SECOND; // 2026-10-25
+    let day2_ts = day1_ts + NS_PER_DAY; // 2026-10-26
+    let clock = Arc::new(ManualClock::new(day1_ts));
+
+    // 1. Write 10 rows on day 1 and stop seal at step 1 so `2026-10-25.hot.sqlite` remains hot on disk.
+    {
+        let mut cfg = StoreConfig::new(&dir);
+        cfg.seal_stop_after_step = Some(1);
+        let store = Store::open_with_clock(cfg, clock.clone()).unwrap();
+        let writer = store.writer();
+        let rows: Vec<Event> = (0..10)
+            .map(|i| sample_event(day1_ts + i * 1000, "api", EventKind::Span, true))
+            .collect();
+        writer.submit(rows).unwrap().wait().unwrap();
+    }
+
+    let hot_day1 = dir.join("days/2026-10-25.hot.sqlite");
+    assert!(hot_day1.exists());
+
+    // 2. Hold an external read transaction open on `2026-10-25.hot.sqlite` so `journal_mode = DELETE`
+    // fails with `SQLITE_BUSY` during startup recovery on day 2.
+    let ext_conn = Connection::open_with_flags(
+        &hot_day1,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .unwrap();
+    ext_conn.execute_batch("BEGIN;").unwrap();
+    let cnt: i64 = ext_conn
+        .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cnt, 10);
+
+    clock.set_ns(day2_ts);
+    let store = Store::open_with_clock(StoreConfig::new(&dir), clock.clone()).unwrap();
+
+    // Must NOT quarantine a healthy file that merely returned SQLITE_BUSY!
+    assert!(
+        store.quarantined_days().is_empty(),
+        "healthy BUSY file must not be quarantined: {:?}",
+        store.quarantined_days()
+    );
+    assert!(hot_day1.exists(), "hot file must remain in place while BUSY");
+    assert!(!dir.join("days/2026-10-25.corrupt.sqlite").exists());
+
+    // And the rows in yesterday's unsealed hot file must remain queryable!
+    let errs = store
+        .reader()
+        .recent_errors(
+            "api",
+            20,
+            Some(TimeWindow::new(day1_ts - NS_PER_HOUR, day2_ts)),
+        )
+        .unwrap();
+    assert_eq!(errs.rows.len(), 10);
+
+    // 3. Release the external reader: background sealer retry must now finish sealing 2026-10-25.sqlite!
+    drop(ext_conn);
+    store.writer().wait_for_seals().unwrap();
+
+    assert!(
+        dir.join("days/2026-10-25.sqlite").exists(),
+        "background retry sealer must seal 2026-10-25.sqlite once external reader closes"
+    );
+    assert!(!hot_day1.exists());
+    assert!(
+        !store
+            .catalog_snapshot()
+            .seal_errors
+            .contains_key("2026-10-25"),
+        "seal_errors must be cleared after retry succeeds"
+    );
+    drop(store);
+
+    // 4. Verify that when a genuinely corrupt hot file has `-wal` and `-shm` sidecars,
+    // quarantine renames them to `.corrupt.sqlite-wal` and `.corrupt.sqlite-shm` instead of unlinking.
+    let corrupt_hot = dir.join("days/2026-10-24.hot.sqlite");
+    let corrupt_wal = dir.join("days/2026-10-24.hot.sqlite-wal");
+    let corrupt_shm = dir.join("days/2026-10-24.hot.sqlite-shm");
+    fs::write(&corrupt_hot, b"not a valid sqlite file header at all").unwrap();
+    fs::write(&corrupt_wal, b"precious wal frames").unwrap();
+    fs::write(&corrupt_shm, b"shm bytes").unwrap();
+
+    let store2 = Store::open_with_clock(StoreConfig::new(&dir), clock.clone()).unwrap();
+    assert_eq!(store2.quarantined_days(), vec!["2026-10-24".to_owned()]);
+    assert!(dir.join("days/2026-10-24.corrupt.sqlite").exists());
+    assert!(
+        dir.join("days/2026-10-24.corrupt.sqlite-wal").exists(),
+        "quarantine must preserve -wal sidecar"
+    );
+    assert!(
+        dir.join("days/2026-10-24.corrupt.sqlite-shm").exists(),
+        "quarantine must preserve -shm sidecar"
+    );
+    drop(store2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn blocker_3_backwards_clock_step_never_overwrites_sealed_day_or_deletes_hot_file() {
+    let dir = temp_test_dir("blocker3-clock-step");
+    let day1_ts = 1_792_886_400 * NS_PER_SECOND + 12 * NS_PER_HOUR; // 2026-10-25 12:00 UTC
+    let day2_ts = day1_ts + NS_PER_DAY; // 2026-10-26 12:00 UTC
+    let clock = Arc::new(ManualClock::new(day1_ts));
+
+    let store = Store::open_with_clock(StoreConfig::new(&dir), clock.clone()).unwrap();
+    let writer = store.writer();
+
+    // 1. Write 15 rows on day 1 (2026-10-25).
+    let d1_rows: Vec<Event> = (0..15)
+        .map(|i| sample_event(day1_ts + i * 1000, "api", EventKind::Span, true))
+        .collect();
+    writer.submit(d1_rows).unwrap().wait().unwrap();
+
+    // 2. Advance clock to day 2 (2026-10-26), write 10 rows, and wait for day 1 to seal.
+    clock.set_ns(day2_ts);
+    let d2_rows: Vec<Event> = (0..10)
+        .map(|i| sample_event(day2_ts + i * 1000, "api", EventKind::Span, true))
+        .collect();
+    writer.submit(d2_rows).unwrap().wait().unwrap();
+    writer.wait_for_seals().unwrap();
+    assert!(dir.join("days/2026-10-25.sqlite").exists());
+
+    // 3. Step clock BACKWARDS to day 1 (2026-10-25) and write 5 more rows, then step forward again.
+    clock.set_ns(day1_ts + 50_000);
+    let backward_rows: Vec<Event> = (0..5)
+        .map(|i| sample_event(day1_ts + 50_000 + i * 1000, "api", EventKind::Span, true))
+        .collect();
+    let ack = writer.submit(backward_rows).unwrap().wait().unwrap();
+    // Forward-only roll keeps the active hot day at 2026-10-26 instead of reopening 2026-10-25!
+    assert_eq!(ack.day, "2026-10-26");
+
+    clock.set_ns(day2_ts + 100_000);
+    writer.flush().unwrap();
+    writer.wait_for_seals().unwrap();
+
+    // Verify all 30 rows (15 sealed in 2026-10-25.sqlite + 15 in 2026-10-26.hot.sqlite) exist!
+    let win = TimeWindow::new(day1_ts - NS_PER_HOUR, day2_ts + NS_PER_HOUR);
+    let errs = store.reader().recent_errors("api", 100, Some(win)).unwrap();
+    assert_eq!(errs.rows.len(), 30);
+    drop(store);
+
+    // 4. Verify startup recovery never deletes `D.hot.sqlite` if `D.sqlite` already exists on disk:
+    // both files are kept in the catalog and `conflicting_days` records the conflict.
+    let extra_hot_path = dir.join("days/2026-10-25.hot.sqlite");
+    {
+        let conn = Connection::open(&extra_hot_path).unwrap();
+        conn.execute_batch(&motel_store::schema::base_ddl(true, false))
+            .unwrap();
+        motel_store::schema::init_meta_defaults(
+            &conn,
+            "local",
+            "2026-10-25",
+            "hot",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events (ts, ingest_ts, kind, service, err, src, body)
+             VALUES (?1, ?2, 'log', 'api', 1, 0, 'extra-hot-row')",
+            rusqlite::params![day1_ts + 999_000, day1_ts + 999_000],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (k, v) VALUES ('min_ts', ?1), ('max_ts', ?1), ('min_ingest_ts', ?1), ('max_ingest_ts', ?1), ('rows', 1)",
+            rusqlite::params![day1_ts + 999_000],
+        )
+        .unwrap();
+    }
+
+    let store2 = Store::open_with_clock(StoreConfig::new(&dir), clock.clone()).unwrap();
+    assert!(
+        extra_hot_path.exists(),
+        "startup recovery must not delete hot file when sealed file already exists"
+    );
+    assert!(dir.join("days/2026-10-25.sqlite").exists());
+    let snap2 = store2.catalog_snapshot();
+    assert!(snap2.conflicting_days.contains(&"2026-10-25".to_owned()));
+
+    // All 31 rows across 2026-10-25.sqlite (15), 2026-10-25.hot.sqlite (1), and 2026-10-26.hot.sqlite (15) are returned!
+    let errs2 = store2.reader().recent_errors("api", 100, Some(win)).unwrap();
+    assert_eq!(errs2.rows.len(), 31);
+
+    drop(store2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn should_fixes_isolation_oversized_blocking_strict_jsonb_limits_and_uri_encoding() {
+    // Use a directory name containing `?` and `#` and spaces to test RFC 3986 URI percent-encoding (Nit 1).
+    let base_dir = temp_test_dir("should-fixes");
+    let dir = base_dir.join("dir with spaces #hash ?query %pct");
+    fs::create_dir_all(&dir).unwrap();
+
+    let t0 = 1_792_886_400 * NS_PER_SECOND;
+    let clock = Arc::new(ManualClock::new(t0));
+
+    let mut cfg = StoreConfig::new(&dir);
+    cfg.direct_jsonb = true;
+    cfg.group_commit_interval = Duration::from_millis(50);
+    cfg.queue_byte_budget = 1024; // Tiny 1 KiB budget to test oversized `submit_blocking` (Should-fix 11).
+
+    let store = Store::open_with_clock(cfg.clone(), clock.clone()).unwrap();
+    let writer = store.writer();
+    let reader = store.reader();
+
+    // 1. Should-fix 11: `submit_blocking` admits a single batch larger than `queue_byte_budget` when queue is empty.
+    let mut big_ev = sample_event(t0, "api", EventKind::Log, true);
+    big_ev.body = Some("B".repeat(4096));
+    // Also test Should-fix 13: caller-supplied `ingest_ts` is ignored and stamped with writer `now_ns` (`t0`).
+    big_ev.ingest_ts = Some(42);
+    let ack = writer.submit_blocking(vec![big_ev], Vec::new()).unwrap();
+    let committed = ack.wait().unwrap();
+    assert_eq!(committed.ingest_ts, t0);
+
+    let got = reader.recent_errors("api", 10, None).unwrap();
+    assert_eq!(got.rows.len(), 1);
+    assert_eq!(
+        got.rows[0].ingest_ts, t0,
+        "writer must stamp its own clock now_ns as ingest_ts"
+    );
+
+    // 2. Should-fix 8: Group commit isolation — one batch with malformed `attrs` must not fail a sibling batch,
+    // and an `evidence.sqlite` failure must not fail a hot-only batch in the same group.
+    let mut bad_attr_ev = sample_event(t0 + 20, "api", EventKind::Log, true);
+    bad_attr_ev.attrs = Some(r#"{"bad": 01}"#.to_owned()); // leading zero invalid in RFC 8259
+    let good_ev = sample_event(t0 + 21, "api", EventKind::Log, true);
+
+    let bad_ack = writer.submit(vec![bad_attr_ev]).unwrap();
+    let good_ack = writer.submit(vec![good_ev]).unwrap();
+    assert!(bad_ack.wait().is_err());
+    assert!(good_ack.wait().is_ok());
+
+    // Inject an evidence commit failure while submitting a hot-only batch and an evidence batch together.
+    cfg.fail_next_evidence_commits
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let hot_only_ack = writer
+        .submit(vec![sample_event(t0 + 30, "api", EventKind::Span, false)])
+        .unwrap();
+    let ev_only_ack = writer
+        .submit(vec![sample_event(t0 + 31, "app", EventKind::Crash, true)])
+        .unwrap();
+    assert!(
+        hot_only_ack.wait().is_ok(),
+        "hot-only batch must succeed even if evidence.sqlite fails"
+    );
+    assert!(
+        ev_only_ack.wait().is_err(),
+        "evidence batch must report failure when evidence commit fails"
+    );
+
+    // 3. Should-fix 12: Direct JSONB encoder strictness (RFC 8259 numbers, escapes, trailing bytes, depth > 128).
+    for invalid_json in [
+        r#"{"a": 1} trailing"#,
+        r#"{"a": 01}"#,
+        r#"{"a": 1.}"#,
+        r#"{"a": 1e}"#,
+        r#"{"a": --1}"#,
+        r#"{"a": "\x41"}"#,
+        r#"{"a": "\uD800"}"#,
+        &format!("{}{}{}", "[".repeat(130), "1", "]".repeat(130)),
+    ] {
+        assert!(
+            motel_store::jsonb::encode_json_str_to_jsonb(invalid_json).is_none(),
+            "expected strict JSONB encoder to reject `{invalid_json}`"
+        );
+    }
+
+    // 4. Should-fix 9: Reader connection limits (`SQLITE_LIMIT_LENGTH = 1 MiB`) block huge allocations in `sql()`.
+    let big_blob_res = reader.sql("SELECT zeroblob(2000000)", None);
+    assert!(
+        big_blob_res.is_err(),
+        "expected SQLITE_LIMIT_LENGTH (1 MiB) to reject 2 MB zeroblob"
+    );
+
+    drop(store);
+    let _ = fs::remove_dir_all(&base_dir);
+}
