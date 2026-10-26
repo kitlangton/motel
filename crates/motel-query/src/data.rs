@@ -1,18 +1,22 @@
 //! Per-call store access built on motel-store's reader primitives.
 //!
 //! A [`Ctx`] holds one catalog snapshot, the call's clock reading, its deadline and the set
-//! of files it touched, so every answer can report exactly what it searched.
+//! of files it touched, so every answer can report exactly what it searched and whether a
+//! time budget cut it short.
 
-use std::cell::RefCell;
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use motel_store::{
-    event_row_from_sql, Catalog, CatalogEntry, EventRow, StoreError, EVENT_COLUMNS, NS_PER_DAY,
+    collect_rows_bounded, event_row_from_sql, Catalog, CatalogEntry, EventRow, StoreError,
+    EVENT_COLUMNS, NS_PER_DAY,
 };
 use rusqlite::params;
-use rusqlite::types::Value;
+use rusqlite::types::{Value, ValueRef};
 
+use crate::fingerprint::{group_message, MSG_CHARS};
 use crate::ids::{EventRef, EVIDENCE_DAY};
 use crate::searched::Visited;
 use crate::time::Tz;
@@ -20,13 +24,28 @@ use crate::{Query, QueryError};
 
 /// Budget for one `why` or `show` call.
 const CALL_BUDGET: Duration = Duration::from_secs(5);
+/// Bytes of event rows one list (a trace, a timeline, a context window) may hold, by
+/// [`EventRow::estimated_bytes`]. Keeps one call well inside the daemon's 50 MB budget
+/// (`docs/engine.md` §5).
+pub(crate) const ROW_BYTES: usize = 4 << 20;
+/// Most events a trace view reads.
+pub(crate) const TRACE_ROWS: usize = 5000;
+/// Services a file may have before the error scan stops merging per-service index ranges
+/// and sorts instead.
+const MERGE_ARMS: usize = 400;
+/// Error kinds that have their own findings (crashes, runs) or live under a run (tests).
+const NON_GROUP_KINDS: &str = "'crash', 'run', 'test'";
 
-/// The message used for error grouping: the body, else an exception/status attribute.
-const MSG_COLUMNS: &str = "substr(body, 1, 512),
-    CASE WHEN body IS NULL OR body = '' THEN CAST(coalesce(
-        attr(attrs, 'exception.message'), attr(attrs, 'error.message'),
-        attr(attrs, 'exception.type'), attr(attrs, 'otel.status_description'),
-        attr(attrs, 'status.message')) AS TEXT) END";
+/// Columns of an error row projected for grouping. The attributes are read only when the
+/// body's first [`MSG_CHARS`] characters are blank, the same rule as [`group_message`].
+fn err_columns() -> String {
+    format!(
+        "id, ts, kind, service, name, substr(body, 1, {MSG_CHARS}),
+         CASE WHEN (body IS NULL OR trim(substr(body, 1, {MSG_CHARS}), char(32, 9, 10, 13, 12)) = '')
+              AND json_valid(attrs, 10) THEN json(attrs) END,
+         trace_id"
+    )
+}
 
 /// An error row projected for grouping.
 #[derive(Debug, Clone)]
@@ -36,16 +55,59 @@ pub(crate) struct ErrRow {
     pub kind: String,
     pub service: String,
     pub name: Option<String>,
+    /// [`group_message`] of the row.
     pub msg: String,
     pub trace_id: Option<[u8; 16]>,
+}
+
+fn lossy(v: ValueRef<'_>) -> Option<Cow<'_, str>> {
+    match v {
+        ValueRef::Null => None,
+        ValueRef::Text(b) | ValueRef::Blob(b) => Some(String::from_utf8_lossy(b)),
+        ValueRef::Integer(i) => Some(Cow::Owned(i.to_string())),
+        ValueRef::Real(f) => Some(Cow::Owned(f.to_string())),
+    }
+}
+
+fn err_row(r: &rusqlite::Row<'_>, day: &str) -> rusqlite::Result<ErrRow> {
+    let body = lossy(r.get_ref(5)?);
+    let attrs = lossy(r.get_ref(6)?);
+    let trace: Option<Vec<u8>> = match r.get_ref(7)? {
+        ValueRef::Blob(b) => Some(b.to_vec()),
+        _ => None,
+    };
+    Ok(ErrRow {
+        ev: EventRef::new(day, r.get(0)?),
+        ts: r.get(1)?,
+        kind: lossy(r.get_ref(2)?).unwrap_or_default().into_owned(),
+        service: lossy(r.get_ref(3)?).unwrap_or_default().into_owned(),
+        name: lossy(r.get_ref(4)?).map(Cow::into_owned),
+        msg: group_message(body.as_deref(), attrs.as_deref()),
+        trace_id: trace.and_then(|b| b.try_into().ok()),
+    })
 }
 
 /// How a bounded scan ended.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Scan {
     pub rows: usize,
-    /// Stopped by the row cap or the deadline before reading everything.
+    /// Stopped by the row cap or a time budget before reading everything.
     pub truncated: bool,
+}
+
+/// Which error rows a scan reads.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ErrScan<'a> {
+    pub start: i64,
+    pub end: i64,
+    /// Only these services; `None` = every service.
+    pub services: Option<&'a [String]>,
+    /// Only this kind and name (`show <g:id>`); otherwise every group kind.
+    pub kind_name: Option<(&'a str, Option<&'a str>)>,
+    /// Newest first within each file. Unordered scans skip the merge and are cheaper.
+    pub ordered: bool,
+    pub cap: usize,
+    pub deadline: Instant,
 }
 
 pub(crate) struct Ctx<'q> {
@@ -55,6 +117,8 @@ pub(crate) struct Ctx<'q> {
     pub tz: Tz,
     pub deadline: Instant,
     pub visited: RefCell<Visited>,
+    /// Some file read stopped at a time budget.
+    pub cut_short: Cell<bool>,
 }
 
 impl<'q> Ctx<'q> {
@@ -66,6 +130,7 @@ impl<'q> Ctx<'q> {
             tz: q.tz,
             deadline: Instant::now() + CALL_BUDGET,
             visited: RefCell::new(Visited::default()),
+            cut_short: Cell::new(false),
         }
     }
 
@@ -87,7 +152,9 @@ impl<'q> Ctx<'q> {
         }
     }
 
-    /// Run `f` on one file, recording the visit. A deadline hit returns `Ok(None)`.
+    /// Run `f` on one file and record the visit. A time budget hit returns `Ok(None)`; when
+    /// it is the call's own budget (not a caller's shorter one, which the caller reports) it
+    /// also marks the call [`Ctx::cut_short`].
     fn on_file<T>(
         &self,
         entry: &CatalogEntry,
@@ -95,81 +162,115 @@ impl<'q> Ctx<'q> {
         f: impl FnMut(&rusqlite::Connection) -> rusqlite::Result<T>,
     ) -> Result<Option<T>, QueryError> {
         self.visited.borrow_mut().add(&entry.day);
+        self.read_file(entry, deadline, f)
+    }
+
+    /// [`Ctx::on_file`] for probes (staleness, last event) that are not part of what the
+    /// answer searched.
+    fn probe_file<T>(
+        &self,
+        entry: &CatalogEntry,
+        f: impl FnMut(&rusqlite::Connection) -> rusqlite::Result<T>,
+    ) -> Result<Option<T>, QueryError> {
+        self.read_file(entry, self.deadline, f)
+    }
+
+    fn read_file<T>(
+        &self,
+        entry: &CatalogEntry,
+        deadline: Instant,
+        f: impl FnMut(&rusqlite::Connection) -> rusqlite::Result<T>,
+    ) -> Result<Option<T>, QueryError> {
         let deadline = deadline.min(self.deadline);
+        let timed_out = || {
+            if Instant::now() >= self.deadline {
+                self.cut_short.set(true);
+            }
+            Ok(None)
+        };
         if Instant::now() >= deadline {
-            return Ok(None);
+            return timed_out();
         }
         match self.q.reader.query_file(entry, deadline, f) {
             Ok(v) => Ok(Some(v)),
-            Err(StoreError::QueryDeadlineExceeded) => Ok(None),
+            Err(StoreError::QueryDeadlineExceeded) => timed_out(),
             Err(e) => Err(e.into()),
         }
     }
 
-    /// Error rows in `[start, end]`, newest first within each file, through the `ix_err`
-    /// partial index. `f` returns false to stop early.
-    #[allow(clippy::too_many_arguments)]
+    /// Error rows of the group kinds (everything but crashes, runs and tests). Files are read
+    /// newest first; an ordered scan also reads each file newest first, merging the `ix_err`
+    /// range of every service rather than sorting. `f` returns false to stop.
     pub fn scan_errors(
         &self,
-        start: i64,
-        end: i64,
-        service: Option<&str>,
-        kind_name: Option<(&str, Option<&str>)>,
-        cap: usize,
-        deadline: Instant,
+        spec: &ErrScan<'_>,
         mut f: impl FnMut(ErrRow) -> bool,
     ) -> Result<Scan, QueryError> {
-        let mut sql = format!(
-            "SELECT id, ts, kind, service, name, {MSG_COLUMNS}, trace_id
-             FROM events INDEXED BY ix_err
-             WHERE err = 1 AND ts BETWEEN ?1 AND ?2"
-        );
-        let mut args: Vec<Value> = vec![Value::Integer(start), Value::Integer(end)];
-        if let Some(s) = service {
-            args.push(Value::Text(s.to_owned()));
-            sql.push_str(&format!(" AND service = ?{}", args.len()));
-        }
-        if let Some((kind, name)) = kind_name {
-            args.push(Value::Text(kind.to_owned()));
-            sql.push_str(&format!(" AND kind = ?{}", args.len()));
-            args.push(name.map_or(Value::Null, |n| Value::Text(n.to_owned())));
-            sql.push_str(&format!(" AND name IS ?{}", args.len()));
-        }
-        sql.push_str(" ORDER BY ts DESC");
-
+        let cols = err_columns();
         let mut scan = Scan::default();
         let mut stopped = false;
-        for entry in self.files(start, end) {
+        for entry in self.files(spec.start, spec.end) {
             if stopped {
                 break;
             }
             let day = entry.day.clone();
-            let res = self.on_file(&entry, deadline, |conn| {
+            let res = self.on_file(&entry, spec.deadline, |conn| {
+                let mut args: Vec<Value> =
+                    vec![Value::Integer(spec.start), Value::Integer(spec.end)];
+                let kind_filter = match spec.kind_name {
+                    Some((kind, name)) => {
+                        args.push(Value::Text(kind.to_owned()));
+                        args.push(name.map_or(Value::Null, |n| Value::Text(n.to_owned())));
+                        "kind = ?3 AND name IS ?4".to_owned()
+                    }
+                    None => format!("kind NOT IN ({NON_GROUP_KINDS})"),
+                };
+                let base = format!(
+                    "SELECT {cols} FROM events INDEXED BY ix_err
+                     WHERE err = 1 AND ts BETWEEN ?1 AND ?2 AND {kind_filter}"
+                );
+                let sql = if spec.ordered {
+                    let services = match spec.services {
+                        Some(s) => s.to_vec(),
+                        None => error_services(conn, MERGE_ARMS + 1)?,
+                    };
+                    if services.is_empty() {
+                        return Ok(());
+                    }
+                    if services.len() > MERGE_ARMS {
+                        format!("{base} ORDER BY ts DESC")
+                    } else {
+                        let mut arms = Vec::with_capacity(services.len());
+                        for s in services {
+                            args.push(Value::Text(s));
+                            arms.push(format!("{base} AND service = ?{}", args.len()));
+                        }
+                        // A compound ORDER BY merges the index-ordered arms without a sort.
+                        format!("{} ORDER BY 2 DESC", arms.join(" UNION ALL "))
+                    }
+                } else {
+                    match spec.services {
+                        Some(s) => {
+                            let mut marks = Vec::with_capacity(s.len());
+                            for svc in s {
+                                args.push(Value::Text(svc.clone()));
+                                marks.push(format!("?{}", args.len()));
+                            }
+                            format!("{base} AND service IN ({})", marks.join(", "))
+                        }
+                        None => base,
+                    }
+                };
                 let mut stmt = conn.prepare_cached(&sql)?;
                 let mut rows = stmt.query(rusqlite::params_from_iter(args.iter()))?;
                 while let Some(r) = rows.next()? {
-                    if scan.rows >= cap {
+                    if scan.rows >= spec.cap {
                         scan.truncated = true;
                         stopped = true;
                         break;
                     }
                     scan.rows += 1;
-                    let body: Option<String> = r.get(5)?;
-                    let alt: Option<String> = r.get(6)?;
-                    let trace: Option<Vec<u8>> = r.get(7)?;
-                    let row = ErrRow {
-                        ev: EventRef::new(&day, r.get(0)?),
-                        ts: r.get(1)?,
-                        kind: r.get(2)?,
-                        service: r.get(3)?,
-                        name: r.get(4)?,
-                        msg: body
-                            .filter(|b| !b.trim().is_empty())
-                            .or(alt)
-                            .unwrap_or_default(),
-                        trace_id: trace.and_then(|b| b.try_into().ok()),
-                    };
-                    if !f(row) {
+                    if !f(err_row(r, &day)?) {
                         stopped = true;
                         break;
                     }
@@ -182,6 +283,41 @@ impl<'q> Ctx<'q> {
             }
         }
         Ok(scan)
+    }
+
+    /// Error rows of one evidence `kind` (`crash` or `run`) in `[start, end]`, newest first,
+    /// at most `limit`; the flag is true when there were more.
+    pub fn evidence_errors(
+        &self,
+        kind: &str,
+        start: i64,
+        end: i64,
+        service: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<ErrRow>, bool), QueryError> {
+        let Some(entry) = self.snap.evidence.clone() else {
+            return Ok((Vec::new(), false));
+        };
+        if entry.rows <= 0 {
+            return Ok((Vec::new(), false));
+        }
+        let sql = format!(
+            "SELECT {} FROM events WHERE err = 1 AND kind = ?1 AND ts BETWEEN ?2 AND ?3
+             AND (?4 IS NULL OR service = ?4) ORDER BY ts DESC, id DESC LIMIT ?5",
+            err_columns()
+        );
+        let got = self.on_file(&entry, self.deadline, |conn| {
+            let mut stmt = conn.prepare_cached(&sql)?;
+            let rows = stmt
+                .query_map(params![kind, start, end, service, limit as i64 + 1], |r| {
+                    err_row(r, EVIDENCE_DAY)
+                })?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })?;
+        let mut rows = got.unwrap_or_default();
+        let more = rows.len() > limit;
+        rows.truncate(limit);
+        Ok((rows, more))
     }
 
     pub fn event(&self, r: &EventRef) -> Result<Option<EventRow>, QueryError> {
@@ -218,8 +354,59 @@ impl<'q> Ctx<'q> {
         Ok(row.flatten())
     }
 
-    /// Events in `[start, end]`, optionally one service and pid, merged across files in time
-    /// order. Keeps the newest `limit` when `newest`, else the oldest.
+    /// Newest `k` event rows matching `sql` over the files overlapping `[start, end]`,
+    /// returned oldest first. Files are read by descending `max_ts` and the read stops once
+    /// `k` rows are held and the next file's `max_ts` is older than the `k`-th newest: the
+    /// merge rule of `docs/engine.md` §4. `sql` must select [`EVENT_COLUMNS`] newest first
+    /// with a `LIMIT` above `k`; `bind` runs it.
+    fn newest_rows(
+        &self,
+        start: i64,
+        end: i64,
+        k: usize,
+        sql: &str,
+        bind: impl Fn(
+            &mut rusqlite::Statement<'_>,
+            &str,
+            usize,
+        ) -> rusqlite::Result<(Vec<EventRow>, bool)>,
+    ) -> Result<(Vec<EventRow>, bool), QueryError> {
+        let mut held: Vec<EventRow> = Vec::new();
+        let mut more = false;
+        for entry in self.files(start, end) {
+            let kth = k.checked_sub(1).and_then(|i| held.get(i)).map(|r| r.ts);
+            if kth.is_some_and(|t| entry.max_ts.is_some_and(|m| m < t)) {
+                more = true;
+                break;
+            }
+            let used: usize = held.iter().map(EventRow::estimated_bytes).sum();
+            let budget = ROW_BYTES.saturating_sub(used);
+            let got = self.on_file(&entry, self.deadline, |conn| {
+                let mut stmt = conn.prepare_cached(sql)?;
+                bind(&mut stmt, &entry.day, budget)
+            })?;
+            let Some((rows, cut)) = got else {
+                more = true;
+                break;
+            };
+            more |= cut;
+            held.extend(rows);
+            held.sort_by(newest_first);
+            if held.len() > k {
+                held.truncate(k);
+                more = true;
+            }
+            if budget == 0 {
+                more = true;
+                break;
+            }
+        }
+        held.reverse();
+        Ok((held, more))
+    }
+
+    /// Events in `[start, end]`, optionally one service and pid, oldest first: the newest
+    /// `limit` when `newest`, else the oldest.
     pub fn events_between(
         &self,
         start: i64,
@@ -260,57 +447,83 @@ impl<'q> Ctx<'q> {
             " ORDER BY e.ts {order}, e.id {order} LIMIT {}",
             limit + 1
         ));
-
-        let mut all = Vec::new();
+        let bind = |stmt: &mut rusqlite::Statement<'_>, day: &str, budget: usize| {
+            let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                event_row_from_sql(r, day)
+            })?;
+            collect_rows_bounded(rows, day, limit + 1, budget)
+        };
+        if newest {
+            return self.newest_rows(start, end, limit, &sql, bind);
+        }
+        let mut all: Vec<EventRow> = Vec::new();
+        let mut more = false;
         for entry in self.files(start, end) {
+            let used: usize = all.iter().map(EventRow::estimated_bytes).sum();
+            let budget = ROW_BYTES.saturating_sub(used);
             let got = self.on_file(&entry, self.deadline, |conn| {
                 let mut stmt = conn.prepare_cached(&sql)?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
-                    event_row_from_sql(r, &entry.day)
-                })?;
-                rows.collect::<Result<Vec<_>, _>>()
+                bind(&mut stmt, &entry.day, budget)
             })?;
-            all.extend(got.unwrap_or_default());
-        }
-        sort_events(&mut all);
-        let more = all.len() > limit;
-        if newest {
-            let skip = all.len().saturating_sub(limit);
-            all.drain(..skip);
-        } else {
-            all.truncate(limit);
+            let Some((rows, cut)) = got else {
+                more = true;
+                break;
+            };
+            more |= cut;
+            all.extend(rows);
+            sort_events(&mut all);
+            if all.len() > limit {
+                all.truncate(limit);
+                more = true;
+            }
         }
         Ok((all, more))
     }
 
-    /// Events of one trace across 14 days plus evidence, deduplicated by span id.
+    /// Events of one trace across 14 days plus evidence, oldest first and deduplicated by
+    /// span id, within [`TRACE_ROWS`] and [`ROW_BYTES`].
     pub fn trace(&self, trace_id: &[u8; 16]) -> Result<(Vec<EventRow>, bool), QueryError> {
         let start = self.now - 14 * NS_PER_DAY;
         let sql = format!(
-            "SELECT {EVENT_COLUMNS} FROM events WHERE trace_id = ?1 ORDER BY ts LIMIT 5001"
+            "SELECT {EVENT_COLUMNS} FROM events WHERE trace_id = ?1 ORDER BY ts LIMIT {}",
+            TRACE_ROWS + 1
         );
         let mut all = Vec::new();
+        let mut more = false;
         // A trace may hold late events outside any window: read every file with rows.
         for entry in self.snap.all_non_empty_files(true) {
             if entry.max_ts.is_some_and(|m| m < start) {
                 continue;
+            }
+            let used: usize = all.iter().map(EventRow::estimated_bytes).sum();
+            let budget = ROW_BYTES.saturating_sub(used);
+            if budget == 0 {
+                more = true;
+                break;
             }
             let got = self.on_file(&entry, self.deadline, |conn| {
                 let mut stmt = conn.prepare_cached(&sql)?;
                 let rows = stmt.query_map(params![&trace_id[..]], |r| {
                     event_row_from_sql(r, &entry.day)
                 })?;
-                rows.collect::<Result<Vec<_>, _>>()
+                collect_rows_bounded(rows, &entry.day, TRACE_ROWS + 1, budget)
             })?;
-            all.extend(got.unwrap_or_default());
+            let Some((rows, cut)) = got else {
+                more = true;
+                break;
+            };
+            more |= cut;
+            all.extend(rows);
+            sort_events(&mut all);
+            if all.len() > TRACE_ROWS {
+                all.truncate(TRACE_ROWS);
+                more = true;
+            }
         }
-        sort_events(&mut all);
         let mut seen = HashSet::new();
         all.retain(|r| {
             r.kind != motel_store::EventKind::Span || r.span_id.is_none_or(|s| seen.insert(s))
         });
-        let more = all.len() > 5000;
-        all.truncate(5000);
         Ok((all, more))
     }
 
@@ -339,7 +552,7 @@ impl<'q> Ctx<'q> {
     }
 
     /// Rows with `session_id` or `request_id` = `value` (column chosen by `by_request`),
-    /// newest `limit` over 14 days, returned oldest first.
+    /// the newest `limit` over 14 days by the merge rule, returned oldest first.
     pub fn by_key(
         &self,
         value: &str,
@@ -353,26 +566,14 @@ impl<'q> Ctx<'q> {
         };
         let start = self.now - 14 * NS_PER_DAY;
         let sql = format!(
-            "SELECT {EVENT_COLUMNS} FROM events WHERE {col} = ?1 AND ts BETWEEN ?2 AND ?3
-             ORDER BY ts DESC LIMIT {}",
+            "SELECT {EVENT_COLUMNS} FROM events WHERE {col} = ?1 AND ts >= ?2
+             ORDER BY ts DESC, id DESC LIMIT {}",
             limit + 1
         );
-        let mut all = Vec::new();
-        for entry in self.files(start, i64::MAX) {
-            let got = self.on_file(&entry, self.deadline, |conn| {
-                let mut stmt = conn.prepare_cached(&sql)?;
-                let rows = stmt.query_map(params![value, start, i64::MAX], |r| {
-                    event_row_from_sql(r, &entry.day)
-                })?;
-                rows.collect::<Result<Vec<_>, _>>()
-            })?;
-            all.extend(got.unwrap_or_default());
-        }
-        sort_events(&mut all);
-        let more = all.len() > limit;
-        let skip = all.len().saturating_sub(limit);
-        all.drain(..skip);
-        Ok((all, more))
+        self.newest_rows(start, i64::MAX, limit, &sql, |stmt, day, budget| {
+            let rows = stmt.query_map(params![value, start], |r| event_row_from_sql(r, day))?;
+            collect_rows_bounded(rows, day, limit + 1, budget)
+        })
     }
 
     /// Run rows (`kind = 'run'`) from evidence: one by row id, or the latest.
@@ -418,9 +619,31 @@ impl<'q> Ctx<'q> {
                 params![kind, start, end, only_errors as i64, limit as i64],
                 |r| event_row_from_sql(r, &entry.day),
             )?;
-            rows.collect::<Result<Vec<_>, _>>()
+            collect_rows_bounded(rows, &entry.day, limit, ROW_BYTES).map(|(rows, _)| rows)
         })?;
         Ok(got.unwrap_or_default())
+    }
+
+    /// Number of evidence rows of `kind` in `[start, end]`.
+    pub fn evidence_count(
+        &self,
+        kind: &str,
+        start: i64,
+        end: i64,
+        only_errors: bool,
+    ) -> Result<usize, QueryError> {
+        let Some(entry) = self.snap.evidence.clone() else {
+            return Ok(0);
+        };
+        let got = self.on_file(&entry, self.deadline, |conn| {
+            conn.query_row(
+                "SELECT count(*) FROM events WHERE kind = ?1 AND ts BETWEEN ?2 AND ?3
+                 AND (?4 = 0 OR err = 1)",
+                params![kind, start, end, only_errors as i64],
+                |r| r.get::<_, i64>(0),
+            )
+        })?;
+        Ok(got.unwrap_or(0).max(0) as usize)
     }
 
     /// Up to `k` slowest spans in `[start, end]` (all services), slowest first.
@@ -444,14 +667,14 @@ impl<'q> Ctx<'q> {
                 rows.collect::<Result<Vec<_>, _>>()
             })?;
             all.extend(got.unwrap_or_default());
+            all.sort_by(|a, b| b.dur.cmp(&a.dur).then(a.ts.cmp(&b.ts)));
+            all.truncate(k);
         }
-        all.sort_by(|a, b| b.dur.cmp(&a.dur).then(a.ts.cmp(&b.ts)));
-        all.truncate(k);
         Ok(all)
     }
 
-    /// Median duration of the newest (up to 200) `service`/`name` spans in `[start, end]`.
-    /// `None` when there are none or the 300 ms budget runs out first.
+    /// Median duration of the newest (up to 200) `service`/`name` spans in `[start, end]`,
+    /// by the merge rule. `None` when there are none or the 300 ms budget runs out first.
     pub fn p50(
         &self,
         service: &str,
@@ -459,40 +682,47 @@ impl<'q> Ctx<'q> {
         start: i64,
         end: i64,
     ) -> Result<Option<i64>, QueryError> {
+        const K: usize = 200;
         let deadline = Instant::now() + Duration::from_millis(300);
-        let sql = "SELECT dur FROM events WHERE service = ?1 AND ts BETWEEN ?2 AND ?3
+        let sql = "SELECT ts, dur FROM events WHERE service = ?1 AND ts BETWEEN ?2 AND ?3
                    AND kind = 'span' AND name = ?4 AND dur IS NOT NULL ORDER BY ts DESC LIMIT 200";
-        let mut durs: Vec<i64> = Vec::new();
+        // (ts, dur), newest first.
+        let mut held: Vec<(i64, i64)> = Vec::new();
         for entry in self.files(start, end) {
-            if durs.len() >= 200 {
+            let kth = held.get(K - 1).map(|h| h.0);
+            if kth.is_some_and(|t| entry.max_ts.is_some_and(|m| m < t)) {
                 break;
             }
             let got = self.on_file(&entry, deadline, |conn| {
                 let mut stmt = conn.prepare_cached(sql)?;
-                let rows =
-                    stmt.query_map(params![service, start, end, name], |r| r.get::<_, i64>(0))?;
+                let rows = stmt.query_map(params![service, start, end, name], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                })?;
                 rows.collect::<Result<Vec<_>, _>>()
             })?;
-            match got {
-                Some(d) => durs.extend(d),
-                None => break,
-            }
+            let Some(rows) = got else {
+                return Ok(None);
+            };
+            held.extend(rows);
+            held.sort_by_key(|h| std::cmp::Reverse(h.0));
+            held.truncate(K);
         }
-        if durs.is_empty() {
+        if held.is_empty() {
             return Ok(None);
         }
+        let mut durs: Vec<i64> = held.into_iter().map(|(_, d)| d).collect();
         durs.sort_unstable();
         Ok(Some(durs[durs.len() / 2]))
     }
 
-    /// Newest event time for `service`, across every file.
+    /// Newest event time for `service`, across every file. A probe: not part of `searched`.
     pub fn service_last_ts(&self, service: &str) -> Result<Option<i64>, QueryError> {
         let mut best: Option<i64> = None;
         for entry in self.snap.all_non_empty_files(true) {
             if best.is_some_and(|b| entry.max_ts.is_some_and(|m| m < b)) {
                 break;
             }
-            let got = self.on_file(&entry, self.deadline, |conn| {
+            let got = self.probe_file(&entry, |conn| {
                 conn.query_row(
                     "SELECT max(ts) FROM events WHERE service = ?1",
                     params![service],
@@ -506,7 +736,7 @@ impl<'q> Ctx<'q> {
         Ok(best)
     }
 
-    /// Newest event of any service: `(ts, service)`.
+    /// Newest event of any service: `(ts, service)`. A probe: not part of `searched`.
     pub fn last_event(&self) -> Result<Option<(i64, String)>, QueryError> {
         let mut best: Option<(i64, String)> = None;
         for entry in self.snap.all_non_empty_files(true) {
@@ -516,7 +746,7 @@ impl<'q> Ctx<'q> {
             {
                 break;
             }
-            let got = self.on_file(&entry, self.deadline, |conn| {
+            let got = self.probe_file(&entry, |conn| {
                 let mut stmt =
                     conn.prepare_cached("SELECT ts, service FROM events ORDER BY ts DESC LIMIT 1")?;
                 let mut rows =
@@ -571,6 +801,33 @@ impl<'q> Ctx<'q> {
     }
 }
 
+/// Up to `max` distinct services with error rows in this file, by a skip-scan of `ix_err`.
+fn error_services(conn: &rusqlite::Connection, max: usize) -> rusqlite::Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut first = conn.prepare_cached(
+        "SELECT service FROM events INDEXED BY ix_err WHERE err = 1 ORDER BY service LIMIT 1",
+    )?;
+    let mut next = first
+        .query_map([], |r| r.get::<_, String>(0))?
+        .next()
+        .transpose()?;
+    let mut after = conn.prepare_cached(
+        "SELECT service FROM events INDEXED BY ix_err WHERE err = 1 AND service > ?1
+         ORDER BY service LIMIT 1",
+    )?;
+    while let Some(s) = next {
+        if out.len() >= max {
+            break;
+        }
+        next = after
+            .query_map(params![s], |r| r.get::<_, String>(0))?
+            .next()
+            .transpose()?;
+        out.push(s);
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResourceInfo {
     pub host: Option<String>,
@@ -586,42 +843,27 @@ pub(crate) fn sort_events(rows: &mut [EventRow]) {
     });
 }
 
-/// The message an error row is grouped by, from a full event row.
-pub(crate) fn event_message(ev: &EventRow) -> String {
-    if let Some(b) = ev.body.as_deref().filter(|b| !b.trim().is_empty()) {
-        return b.to_owned();
-    }
-    let Some(attrs) = ev.attrs.as_deref() else {
-        return String::new();
-    };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(attrs)
-    else {
-        return String::new();
-    };
-    for key in [
-        "exception.message",
-        "error.message",
-        "exception.type",
-        "otel.status_description",
-        "status.message",
-    ] {
-        match map.get(key) {
-            Some(serde_json::Value::String(s)) => return s.clone(),
-            Some(v) if !v.is_null() => return v.to_string(),
-            _ => {}
-        }
-    }
-    String::new()
+fn newest_first(a: &EventRow, b: &EventRow) -> std::cmp::Ordering {
+    b.ts.cmp(&a.ts)
+        .then_with(|| b.day.cmp(&a.day))
+        .then_with(|| b.row_id.cmp(&a.row_id))
 }
 
-/// The `g:` id an error event belongs to.
-pub(crate) fn event_group_id(ev: &EventRow) -> String {
-    crate::fingerprint::group_id(crate::fingerprint::fingerprint(
-        &ev.service,
-        ev.kind.as_str(),
-        ev.name.as_deref(),
-        &event_message(ev),
-    ))
+/// The message an error row is grouped by, from a full event row ([`group_message`]).
+pub(crate) fn event_message(ev: &EventRow) -> String {
+    group_message(ev.body.as_deref(), ev.attrs.as_deref())
+}
+
+/// The `g:` id an error event belongs to, or `None` for kinds that are not grouped.
+pub(crate) fn event_group_id(ev: &EventRow) -> Option<String> {
+    (ev.err && is_group_kind(ev.kind.as_str())).then(|| {
+        crate::fingerprint::group_id(crate::fingerprint::fingerprint(
+            &ev.service,
+            ev.kind.as_str(),
+            ev.name.as_deref(),
+            &event_message(ev),
+        ))
+    })
 }
 
 /// Attribute lookup on an event's JSON attrs.
@@ -645,4 +887,76 @@ pub(crate) fn attr_str(ev: &EventRow, key: &str) -> Option<String> {
 /// failed tests are shown under their run).
 pub(crate) fn is_group_kind(kind: &str) -> bool {
     !matches!(kind, "crash" | "run" | "test")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixture::{log, seeded, seeded_with, span, trace, Row, D, H, M, MS, NOW, S};
+    use crate::searched::CUT_SHORT_NOTE;
+
+    #[test]
+    fn a_spent_deadline_is_reported_not_swallowed() {
+        let f = seeded("data-deadline");
+        let q = f.query();
+        let mut ctx = Ctx::new(&q);
+        ctx.deadline = Instant::now();
+        let (rows, more) = ctx
+            .events_between(NOW - D, NOW, None, None, 10, true)
+            .unwrap();
+        assert!(rows.is_empty() && more);
+        let s = ctx.searched(NOW - D, NOW);
+        assert!(s.truncated);
+        assert!(s.notes.iter().any(|n| n == CUT_SHORT_NOTE));
+        assert!(s.line().contains("time budget"));
+    }
+
+    #[test]
+    fn probes_are_not_searched_days() {
+        let f = seeded("data-probe");
+        let q = f.query();
+        let ctx = Ctx::new(&q);
+        assert!(ctx.service_last_ts("cron").unwrap().is_some());
+        assert!(ctx.last_event().unwrap().is_some());
+        assert!(ctx.visited.borrow().0.is_empty());
+    }
+
+    #[test]
+    fn by_key_and_p50_keep_the_newest_across_files() {
+        let session = |ts: i64, arrive: i64, body: &str| {
+            let mut e = log(ts, "svc", 9, body);
+            e.session_id = Some("s1".to_owned());
+            Row { arrive, ev: e }
+        };
+        let mut rows = vec![
+            session(NOW - 3 * D, NOW - 3 * D, "row 0"),
+            session(NOW - 2 * D, NOW - 2 * D, "row 1"),
+            session(NOW - D, NOW - D, "row 2"),
+            session(NOW - H, NOW - H, "row 3"),
+            // Stamped 2.5 days ago, arriving in today's file.
+            session(NOW - 2 * D - 12 * H, NOW - 30 * M, "late"),
+        ];
+        // 300 older fast spans, then 200 newer slow ones.
+        for i in 0..300 {
+            let ts = NOW - 5 * D + i * S;
+            let ev = span(ts, "svc", "op", 10 * MS, trace(1), 1000 + i as u64, None);
+            rows.push(Row { arrive: ts, ev });
+        }
+        for i in 0..200 {
+            let ts = NOW - 2 * D + H + i * S;
+            let ev = span(ts, "svc", "op", 100 * MS, trace(2), 5000 + i as u64, None);
+            rows.push(Row { arrive: ts, ev });
+        }
+        let f = seeded_with("data-merge", rows);
+        let q = f.query();
+        let ctx = Ctx::new(&q);
+        let (got, more) = ctx.by_key("s1", false, 3).unwrap();
+        assert!(more);
+        let bodies: Vec<&str> = got.iter().filter_map(|r| r.body.as_deref()).collect();
+        assert_eq!(bodies, ["row 1", "row 2", "row 3"]);
+        assert_eq!(
+            ctx.p50("svc", "op", NOW - 7 * D, NOW).unwrap(),
+            Some(100 * MS)
+        );
+    }
 }

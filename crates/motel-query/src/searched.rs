@@ -1,4 +1,4 @@
-//! What a call searched (api.md "every response says what it searched").
+//! What a call searched (`docs/agent-api.md` §4).
 
 use std::collections::BTreeSet;
 
@@ -32,6 +32,8 @@ pub struct Searched {
     pub staleness_secs: Option<i64>,
     /// True when `why` widened an empty default window.
     pub walked_back: bool,
+    /// True when a time budget stopped a file read, so the answer may be missing rows.
+    pub truncated: bool,
     pub notes: Vec<String>,
     #[serde(skip)]
     pub(crate) start_ns: i64,
@@ -44,6 +46,9 @@ pub struct Searched {
     #[serde(skip)]
     pub(crate) tz: Tz,
 }
+
+pub(crate) const CUT_SHORT_NOTE: &str =
+    "hit the time budget before reading every file; the answer may be incomplete";
 
 /// Files touched while answering one call.
 #[derive(Debug, Default, Clone)]
@@ -62,6 +67,7 @@ impl Ctx<'_> {
         let now_ns = self.now;
         let last_write_ns = self.snap.max_ingest_ts();
         let visited = self.visited.borrow();
+        let truncated = self.cut_short.get();
         let days: Vec<String> = visited
             .0
             .iter()
@@ -82,7 +88,12 @@ impl Ctx<'_> {
             last_write: last_write_ns.map(iso),
             staleness_secs: last_write_ns.map(|w| (now_ns - w).max(0) / 1_000_000_000),
             walked_back: false,
-            notes: Vec::new(),
+            truncated,
+            notes: if truncated {
+                vec![CUT_SHORT_NOTE.to_owned()]
+            } else {
+                Vec::new()
+            },
             start_ns,
             end_ns,
             now_ns,
@@ -113,8 +124,8 @@ impl Searched {
             2 | 3 => format!("days {}", self.days.join(", ")),
             n => format!(
                 "{n} days {} → {}",
-                self.days.first().unwrap(),
-                self.days.last().unwrap()
+                self.days.first().map_or("", String::as_str),
+                self.days.last().map_or("", String::as_str)
             ),
         };
         parts.push(if self.evidence {
