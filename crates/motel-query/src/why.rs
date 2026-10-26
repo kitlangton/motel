@@ -1,27 +1,49 @@
-//! `motel why [service]`: ranked findings (api.md §1).
+//! `motel why [service]`: ranked findings (`docs/agent-api.md` §1).
 //!
 //! Ranking: crashes, then NEW error groups, then failed runs, then recurring error groups.
 //! Within a rank: crashes and runs newest first, groups by count then recency.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use motel_store::{EventRow, NS_PER_DAY, NS_PER_HOUR};
 use serde::Serialize;
 
-use crate::data::{attr, attr_str, is_group_kind, Ctx, ErrRow};
+use crate::data::{attr, attr_str, Ctx, ErrRow, ErrScan};
 use crate::fingerprint::{fingerprint, group_id};
 use crate::ids::EventRef;
-use crate::render::{count, finish, one_line, plural, shell_arg, sql_str, table, LIST_BODY_CHARS};
+use crate::render::{
+    count, finish, motel_sql, one_line, plural, shell_arg, sql_str, table, LIST_BODY_CHARS,
+};
 use crate::searched::Searched;
 use crate::time::{fmt_dur, fmt_minute, fmt_range, fmt_time, iso};
 use crate::{Answer, Query, QueryError};
 
-/// Error rows read per window before counting stops.
-const ERROR_SCAN_CAP: usize = 200_000;
-/// Baseline (7 days before the window) rows read per service.
-const BASELINE_SCAN_CAP: usize = 200_000;
+const BASELINE_BUDGET: Duration = Duration::from_millis(1500);
 const BASELINE_DAYS: i64 = 7;
+
+/// Bounds on one window's work.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Caps {
+    /// Error rows read before counting stops.
+    pub error_rows: usize,
+    /// Baseline (7 days before the window) rows read in total, across services.
+    pub baseline_rows: usize,
+    /// Distinct error groups held; further groups are counted, not listed.
+    pub groups: usize,
+    /// Crash and failed-run rows read from evidence.
+    pub evidence: usize,
+}
+
+impl Caps {
+    pub const DEFAULT: Caps = Caps {
+        error_rows: 200_000,
+        baseline_rows: 400_000,
+        groups: 5_000,
+        evidence: 2_000,
+    };
+}
 /// Default-window walk-back: 24 h, then 3, 7 and 14 days.
 const WALK_BACK: [i64; 4] = [
     24 * NS_PER_HOUR,
@@ -124,6 +146,9 @@ pub struct WhyAnswer {
     pub searched: Searched,
     /// The NEW baseline: the 7 days before the window start.
     pub baseline_since: Option<String>,
+    /// False when the baseline scan hit its budget: NEW groups were not seen in the part
+    /// read, and text marks them `NEW?`.
+    pub baseline_complete: bool,
     pub findings: Vec<Finding>,
     /// Findings beyond `limit`.
     pub omitted: u64,
@@ -148,39 +173,60 @@ struct Agg {
 }
 
 impl Agg {
-    fn new(r: &ErrRow) -> Self {
+    fn new(r: ErrRow) -> Self {
         Self {
-            service: r.service.clone(),
-            kind: r.kind.clone(),
-            name: r.name.clone(),
-            count: 0,
+            service: r.service,
+            kind: r.kind,
+            name: r.name,
+            count: 1,
             first: r.ts,
             last: r.ts,
-            latest: r.ev.clone(),
-            latest_msg: r.msg.clone(),
+            latest: r.ev,
+            latest_msg: r.msg,
         }
     }
 
-    fn add(&mut self, r: &ErrRow) {
+    fn add(&mut self, r: ErrRow) {
         self.count += 1;
         self.first = self.first.min(r.ts);
-        if r.ts > self.last || self.count == 1 {
+        if r.ts > self.last {
             self.last = r.ts;
-            self.latest = r.ev.clone();
-            self.latest_msg = r.msg.clone();
+            self.latest = r.ev;
+            self.latest_msg = r.msg;
         }
     }
 }
 
+fn fp_of(r: &ErrRow) -> u64 {
+    fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg)
+}
+
 struct Window {
+    /// The first `limit` findings in rank order.
     findings: Vec<Finding>,
+    /// Findings before the cut.
+    total: usize,
     totals: WhyTotals,
+    baseline_complete: bool,
     notes: Vec<String>,
 }
 
 pub(crate) fn why(q: &Query, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
+    why_with(q, args, Caps::DEFAULT)
+}
+
+pub(crate) fn why_with(q: &Query, args: &WhyArgs, caps: Caps) -> Result<WhyAnswer, QueryError> {
     let ctx = Ctx::new(q);
     let end = args.until.unwrap_or(ctx.now);
+    if let Some(since) = args.since {
+        if since > end {
+            return Err(QueryError::BadTime(format!(
+                "--since {} is after --until {}",
+                iso(since),
+                iso(end)
+            )));
+        }
+    }
     let limit = if args.limit == 0 {
         10
     } else {
@@ -196,6 +242,7 @@ pub(crate) fn why(q: &Query, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
         service: svc.map(str::to_owned),
         searched: ctx.searched(end - WALK_BACK[0], end),
         baseline_since: None,
+        baseline_complete: true,
         findings: Vec::new(),
         omitted: 0,
         totals: WhyTotals::default(),
@@ -238,18 +285,20 @@ pub(crate) fn why(q: &Query, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
     };
     let mut tried = 0;
     let mut start = starts[0];
-    let mut result = None;
+    let mut w = None;
     for s in &starts {
         tried += 1;
         start = *s;
-        let w = analyze(&ctx, svc, start, end, limit)?;
-        if !w.findings.is_empty() {
-            result = Some(w);
+        let found = analyze(&ctx, svc, start, end, limit, caps)?;
+        let done = !found.findings.is_empty() || ctx.cut_short.get();
+        w = Some(found);
+        if done {
             break;
         }
-        result = Some(w);
     }
-    let w = result.expect("at least one window");
+    let Some(w) = w else {
+        return Err(QueryError::BadTime("no window to search".to_owned()));
+    };
 
     answer.searched = ctx.searched(start, end);
     answer.searched.walked_back = tried > 1;
@@ -270,11 +319,10 @@ pub(crate) fn why(q: &Query, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
     answer.searched.notes.extend(w.notes);
     answer.baseline_start_ns = start - BASELINE_DAYS * NS_PER_DAY;
     answer.baseline_since = Some(iso(answer.baseline_start_ns));
+    answer.baseline_complete = w.baseline_complete;
     answer.totals = w.totals;
-
-    let total = w.findings.len();
-    answer.findings = w.findings.into_iter().take(limit).collect();
-    answer.omitted = total.saturating_sub(answer.findings.len()) as u64;
+    answer.omitted = w.total.saturating_sub(w.findings.len()) as u64;
+    answer.findings = w.findings;
 
     if answer.findings.is_empty() {
         let (last_ns, last_service) = match svc {
@@ -291,14 +339,14 @@ pub(crate) fn why(q: &Query, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
         });
         answer.next = match svc {
             Some(s) => vec![
-                format!(
-                    "motel sql \"select kind, name, count(*) n from events where service = '{}' group by 1, 2 order by n desc\"",
+                motel_sql(&format!(
+                    "select kind, name, count(*) n from events where service = '{}' group by 1, 2 order by n desc",
                     sql_str(s)
-                ),
+                )),
                 "motel why".to_owned(),
             ],
             None => vec![
-                "motel sql \"select service, kind, count(*) n from events group by 1, 2 order by n desc\"".to_owned(),
+                motel_sql("select service, kind, count(*) n from events group by 1, 2 order by n desc"),
                 "motel schema".to_owned(),
             ],
         };
@@ -321,83 +369,137 @@ pub(crate) fn why(q: &Query, args: &WhyArgs) -> Result<WhyAnswer, QueryError> {
     Ok(answer)
 }
 
+/// One window. Crashes and failed runs come from the evidence store; only the remaining
+/// error kinds are scanned from day files and grouped by fingerprint.
 fn analyze(
     ctx: &Ctx<'_>,
     svc: Option<&str>,
     start: i64,
     end: i64,
     limit: usize,
+    caps: Caps,
 ) -> Result<Window, QueryError> {
-    let mut groups: HashMap<u64, Agg> = HashMap::new();
-    let mut crashes: HashMap<u64, Agg> = HashMap::new();
-    let mut runs: Vec<ErrRow> = Vec::new();
-    let mut error_events = 0u64;
     let mut notes = Vec::new();
 
-    let scan = ctx.scan_errors(start, end, svc, None, ERROR_SCAN_CAP, ctx.deadline, |r| {
-        match r.kind.as_str() {
-            "run" => runs.push(r),
-            "crash" => {
-                let fp = fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg);
-                crashes.entry(fp).or_insert_with(|| Agg::new(&r)).add(&r);
+    let (crash_rows, crashes_more) =
+        ctx.evidence_errors("crash", start, end, svc, caps.evidence)?;
+    let crash_count = crash_rows.len() as u64;
+    let mut crashes: HashMap<u64, Agg> = HashMap::new();
+    for r in crash_rows {
+        match crashes.entry(fp_of(&r)) {
+            Entry::Occupied(mut e) => e.get_mut().add(r),
+            Entry::Vacant(e) => {
+                e.insert(Agg::new(r));
             }
-            k if is_group_kind(k) => {
-                error_events += 1;
-                let fp = fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg);
-                groups.entry(fp).or_insert_with(|| Agg::new(&r)).add(&r);
-            }
-            _ => {}
         }
-        true
-    })?;
+    }
+    let (runs, runs_more) = ctx.evidence_errors("run", start, end, svc, caps.evidence)?;
+    if crashes_more || runs_more {
+        notes.push(format!(
+            "more than {} crashes or failed runs; counted the newest",
+            count(caps.evidence as u64)
+        ));
+    }
+
+    let mut groups: HashMap<u64, Agg> = HashMap::new();
+    let mut error_events = 0u64;
+    let mut ungrouped = 0u64;
+    let services = svc.map(|s| vec![s.to_owned()]);
+    let scan = ctx.scan_errors(
+        &ErrScan {
+            start,
+            end,
+            services: services.as_deref(),
+            kind_name: None,
+            ordered: true,
+            cap: caps.error_rows,
+            deadline: ctx.deadline,
+        },
+        |r| {
+            error_events += 1;
+            let fp = fp_of(&r);
+            let full = groups.len() >= caps.groups;
+            match groups.entry(fp) {
+                Entry::Occupied(mut e) => e.get_mut().add(r),
+                Entry::Vacant(e) if !full => {
+                    e.insert(Agg::new(r));
+                }
+                Entry::Vacant(_) => ungrouped += 1,
+            }
+            true
+        },
+    )?;
     if scan.truncated {
         notes.push(format!(
             "counted the newest {} error events only",
             count(scan.rows as u64)
         ));
     }
-
-    // NEW: fingerprints absent from the 7 days before the window start.
-    let baseline_start = start - BASELINE_DAYS * NS_PER_DAY;
-    let mut unseen: HashSet<u64> = groups.keys().copied().collect();
-    let mut by_service: HashMap<String, HashSet<u64>> = HashMap::new();
-    for (fp, g) in &groups {
-        by_service.entry(g.service.clone()).or_default().insert(*fp);
+    if ungrouped > 0 {
+        notes.push(format!(
+            "more than {} distinct error groups; {} events in further groups are counted but not listed",
+            count(caps.groups as u64),
+            count(ungrouped)
+        ));
     }
-    let baseline_deadline = Instant::now() + Duration::from_millis(1500);
-    let mut services: Vec<_> = by_service.into_iter().collect();
-    services.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut partial = false;
-    for (service, mut pending) in services {
-        let s = ctx.scan_errors(
-            baseline_start,
-            start - 1,
-            Some(&service),
-            None,
-            BASELINE_SCAN_CAP,
-            baseline_deadline,
+
+    // NEW: fingerprints absent from the 7 days before the window start. One pass over the
+    // baseline files (newest first) with one shared row cap, stopping once every group has
+    // been seen.
+    let mut unseen: HashSet<u64> = groups.keys().copied().collect();
+    let mut baseline_complete = true;
+    if !unseen.is_empty() {
+        let mut names: Vec<String> = groups.values().map(|g| g.service.clone()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let b = ctx.scan_errors(
+            &ErrScan {
+                start: start - BASELINE_DAYS * NS_PER_DAY,
+                end: start - 1,
+                services: Some(&names),
+                kind_name: None,
+                ordered: false,
+                cap: caps.baseline_rows,
+                deadline: Instant::now() + BASELINE_BUDGET,
+            },
             |r| {
-                if is_group_kind(&r.kind) {
-                    let fp = fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg);
-                    if pending.remove(&fp) {
-                        unseen.remove(&fp);
-                    }
-                }
-                !pending.is_empty()
+                unseen.remove(&fp_of(&r));
+                !unseen.is_empty()
             },
         )?;
-        partial |= s.truncated;
+        baseline_complete = !b.truncated;
     }
-    if partial {
-        notes.push("baseline scan hit its budget; some NEW marks may be recurring".to_owned());
+    if !baseline_complete && !unseen.is_empty() {
+        notes.push(
+            "baseline scan stopped early; NEW? groups were not seen in the part read and may be recurring"
+                .to_owned(),
+        );
     }
-
-    let mut findings: Vec<Finding> = Vec::new();
 
     let mut crash_list: Vec<Agg> = crashes.into_values().collect();
-    crash_list.sort_by_key(|c| std::cmp::Reverse(c.last));
-    let crash_count = crash_list.iter().map(|c| c.count).sum();
-    for c in crash_list {
+    crash_list.sort_by(|a, b| {
+        b.last
+            .cmp(&a.last)
+            .then(a.latest.row_id.cmp(&b.latest.row_id))
+    });
+    let mut group_list: Vec<(bool, u64, Agg)> = groups
+        .into_iter()
+        .map(|(fp, g)| (unseen.contains(&fp), fp, g))
+        .collect();
+    group_list.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(b.2.count.cmp(&a.2.count))
+            .then(b.2.last.cmp(&a.2.last))
+            .then(a.1.cmp(&b.1))
+    });
+    let new_groups = group_list.iter().filter(|g| g.0).count();
+    let group_count = group_list.len();
+    let total = crash_list.len() + group_list.len() + runs.len();
+
+    // Rank order: crashes, NEW groups, failed runs, recurring groups. Only the first
+    // `limit` become findings.
+    let mut findings: Vec<Finding> = Vec::with_capacity(limit.min(total));
+    for c in crash_list.iter().take(limit) {
         let first_line = c
             .latest_msg
             .lines()
@@ -409,59 +511,37 @@ fn analyze(
         };
         findings.push(finding(
             FindingKind::Crash,
-            &c,
+            c,
             one_line(&summary, LIST_BODY_CHARS),
             c.latest.id(),
         ));
     }
-
-    let mut group_list: Vec<(bool, u64, Agg)> = groups
-        .into_iter()
-        .map(|(fp, g)| (unseen.contains(&fp), fp, g))
-        .collect();
-    group_list.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then(b.2.count.cmp(&a.2.count))
-            .then(b.2.last.cmp(&a.2.last))
-            .then(a.1.cmp(&b.1))
-    });
-    let new_groups = group_list.iter().filter(|g| g.0).count() as u64;
-    let group_count = group_list.len() as u64;
-    let mut recurring = Vec::new();
-    for (is_new, fp, g) in group_list {
-        let summary = group_summary(&g);
-        let f = finding(
-            if is_new {
+    let (new_list, recurring_list) = group_list.split_at(new_groups);
+    let group_finding = |(is_new, fp, g): &(bool, u64, Agg)| {
+        finding(
+            if *is_new {
                 FindingKind::New
             } else {
                 FindingKind::Recurring
             },
-            &g,
-            summary,
-            group_id(fp),
-        );
-        if is_new {
-            findings.push(f);
-        } else {
-            recurring.push(f);
-        }
-    }
-
-    runs.sort_by_key(|r| std::cmp::Reverse(r.ts));
-    let failed_runs = runs.len() as u64;
-    // Only the runs that can make the cut need their details.
+            g,
+            group_summary(g),
+            group_id(*fp),
+        )
+    };
     let room = limit.saturating_sub(findings.len());
-    for (i, r) in runs.iter().enumerate() {
-        let summary = match if i < room { ctx.event(&r.ev)? } else { None } {
+    findings.extend(new_list.iter().take(room).map(group_finding));
+    let room = limit.saturating_sub(findings.len());
+    for r in runs.iter().take(room) {
+        let summary = match ctx.event(&r.ev)? {
             Some(ev) => {
-                let end = ev.ts + ev.dur.unwrap_or(0);
-                let failed = ctx.evidence_rows("test", ev.ts, end, true, 1000)?.len();
+                let failed =
+                    ctx.evidence_count("test", ev.ts, ev.ts + ev.dur.unwrap_or(0), true)?;
                 run_summary(&ev, failed)
             }
             None => one_line(r.name.as_deref().unwrap_or("run"), LIST_BODY_CHARS),
         };
-        let mut agg = Agg::new(r);
-        agg.add(r);
+        let agg = Agg::new(r.clone());
         findings.push(finding(
             FindingKind::FailedRun,
             &agg,
@@ -469,17 +549,20 @@ fn analyze(
             format!("run:{}", r.ev.row_id),
         ));
     }
-    findings.extend(recurring);
+    let room = limit.saturating_sub(findings.len());
+    findings.extend(recurring_list.iter().take(room).map(group_finding));
 
     Ok(Window {
         findings,
+        total,
         totals: WhyTotals {
             error_events,
-            groups: group_count,
-            new_groups,
+            groups: group_count as u64,
+            new_groups: new_groups as u64,
             crashes: crash_count,
-            failed_runs,
+            failed_runs: runs.len() as u64,
         },
+        baseline_complete,
         notes,
     })
 }
@@ -661,7 +744,11 @@ impl Answer for WhyAnswer {
                 for (i, f) in self.findings.iter().enumerate() {
                     rows.push(vec![
                         (i + 1).to_string(),
-                        f.kind.label().to_owned(),
+                        if f.kind == FindingKind::New && !self.baseline_complete {
+                            "NEW?".to_owned()
+                        } else {
+                            f.kind.label().to_owned()
+                        },
                         f.service.clone(),
                         count(f.count),
                         fmt_range(f.first_ns, f.last_ns, now, tz),
@@ -704,6 +791,75 @@ impl Answer for WhyAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixture::{seeded, Fixture};
+
+    fn why_caps(f: &Fixture, caps: Caps) -> WhyAnswer {
+        why_with(&f.query(), &WhyArgs::default(), caps).unwrap()
+    }
+
+    #[test]
+    fn crashes_and_failed_runs_survive_the_error_scan_cap() {
+        let f = seeded("why-cap-errors");
+        let w = why_caps(
+            &f,
+            Caps {
+                error_rows: 2,
+                ..Caps::DEFAULT
+            },
+        );
+        assert!(w
+            .findings
+            .iter()
+            .any(|x| x.kind == FindingKind::Crash && x.id == "e:ev.2"));
+        assert!(w
+            .findings
+            .iter()
+            .any(|x| x.kind == FindingKind::FailedRun && x.id == "run:3"));
+        assert_eq!(w.totals.error_events, 2);
+        assert!(w
+            .searched
+            .notes
+            .iter()
+            .any(|n| n.contains("newest 2 error events")));
+    }
+
+    #[test]
+    fn an_incomplete_baseline_marks_new_unconfirmed() {
+        let f = seeded("why-cap-baseline");
+        let w = why_caps(
+            &f,
+            Caps {
+                baseline_rows: 1,
+                ..Caps::DEFAULT
+            },
+        );
+        assert!(!w.baseline_complete);
+        let text = w.text();
+        assert!(text.contains("NEW?"), "{text}");
+        assert!(text.contains("baseline scan stopped early"), "{text}");
+        let w = why_caps(&f, Caps::DEFAULT);
+        assert!(w.baseline_complete);
+        assert!(!w.text().contains("NEW?"));
+    }
+
+    #[test]
+    fn distinct_groups_are_capped_but_still_counted() {
+        let f = seeded("why-cap-groups");
+        let w = why_caps(
+            &f,
+            Caps {
+                groups: 2,
+                ..Caps::DEFAULT
+            },
+        );
+        assert_eq!(w.totals.groups, 2);
+        assert_eq!(w.totals.error_events, 10);
+        assert!(w
+            .searched
+            .notes
+            .iter()
+            .any(|n| n.contains("more than 2 distinct error groups")));
+    }
 
     #[test]
     fn near_names() {
