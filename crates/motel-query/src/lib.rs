@@ -108,6 +108,10 @@ impl Query {
             Since::RunLast => self.last_run_start()?.ok_or_else(|| {
                 QueryError::BadTime("run:last: no runs recorded on this host".to_owned())
             }),
+            Since::GitRefOr { rev, at } => match cwd {
+                Some(dir) => Ok(time::git_commit_time_ns(dir, &rev).unwrap_or(at)),
+                None => Ok(at),
+            },
             Since::GitRef(rev) => match cwd {
                 Some(dir) => time::git_commit_time_ns(dir, &rev),
                 None => Err(QueryError::BadTime(format!(

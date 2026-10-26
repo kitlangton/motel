@@ -1,4 +1,4 @@
-//! Time zones, human formatting, and `--since` parsing (api.md §3).
+//! Time zones, human formatting, and `--since` parsing (`docs/agent-api.md` §3).
 
 use std::path::Path;
 use std::process::Command;
@@ -168,6 +168,9 @@ pub enum Since {
     At(i64),
     /// A git revision, resolved to its commit time by the CLI and stdio MCP.
     GitRef(String),
+    /// Reads as both a duration and an abbreviated commit hash (`1234567d`): the commit time
+    /// when the ref resolves, else `at`.
+    GitRefOr { rev: String, at: i64 },
     /// The start of the most recent run.
     RunLast,
 }
@@ -183,7 +186,15 @@ pub fn parse_since(input: &str, now_ns: i64, tz: Tz) -> Result<Since, QueryError
         return Ok(Since::RunLast);
     }
     if let Some(ns) = parse_duration_ns(s) {
-        return Ok(Since::At(now_ns.saturating_sub(ns)));
+        let at = now_ns.saturating_sub(ns);
+        // Git abbreviates hashes to at least 7 hex digits; a duration in days can look like one.
+        if s.len() >= 7 && s.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(Since::GitRefOr {
+                rev: s.to_owned(),
+                at,
+            });
+        }
+        return Ok(Since::At(at));
     }
     if let Some(ts) = parse_clock_today(s, now_ns, tz) {
         return Ok(Since::At(ts));
@@ -206,7 +217,10 @@ pub fn parse_since(input: &str, now_ns: i64, tz: Tz) -> Result<Since, QueryError
     )))
 }
 
-/// Parse `90s`, `30m`, `2h`, `7d`, `1w`, `500ms` and sums like `1h30m`.
+/// Longest duration accepted: 10 years.
+const MAX_DURATION: i64 = 3650 * NS_PER_DAY;
+
+/// Parse `90s`, `30m`, `2h`, `7d`, `1w`, `500ms` and sums like `1h30m`, up to 3,650 days.
 pub fn parse_duration_ns(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     let mut i = 0;
@@ -234,7 +248,14 @@ pub fn parse_duration_ns(s: &str) -> Option<i64> {
             "w" => 7 * NS_PER_DAY,
             _ => return None,
         };
-        total = total.checked_add((num * unit as f64) as i64)?;
+        let part = num * unit as f64;
+        if !part.is_finite() || part > MAX_DURATION as f64 {
+            return None;
+        }
+        total = total.checked_add(part as i64)?;
+        if total > MAX_DURATION {
+            return None;
+        }
         any = true;
     }
     any.then_some(total)
@@ -307,6 +328,33 @@ mod tests {
         assert_eq!(parse_duration_ns("HEAD"), None);
         assert_eq!(parse_duration_ns("2x"), None);
         assert_eq!(parse_duration_ns(""), None);
+        // Capped at 3,650 days rather than saturating.
+        assert_eq!(parse_duration_ns("3650d"), Some(3650 * NS_PER_DAY));
+        assert_eq!(parse_duration_ns("3651d"), None);
+        assert_eq!(parse_duration_ns("99999999999999999999h"), None);
+        assert_eq!(parse_duration_ns("3000d3000d"), None);
+    }
+
+    #[test]
+    fn hash_like_durations_prefer_git() {
+        let tz = Tz::Fixed(0);
+        // Too long to be a duration: only a git ref.
+        assert_eq!(
+            parse_since("123456d", NOW, tz).unwrap(),
+            Since::GitRef("123456d".to_owned())
+        );
+        // A duration that is also a plausible abbreviated hash.
+        assert_eq!(
+            parse_since("0000100d", NOW, tz).unwrap(),
+            Since::GitRefOr {
+                rev: "0000100d".to_owned(),
+                at: NOW - 100 * NS_PER_DAY
+            }
+        );
+        assert_eq!(
+            parse_since("100d", NOW, tz).unwrap(),
+            Since::At(NOW - 100 * NS_PER_DAY)
+        );
     }
 
     #[test]
