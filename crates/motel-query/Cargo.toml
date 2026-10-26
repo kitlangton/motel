@@ -1,0 +1,14 @@
+[package]
+name = "motel-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent query layer for motel: why, show, sql and schema over motel-store"
+
+[dependencies]
+motel-store = { path = "../motel-store" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust.workspace = true
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
