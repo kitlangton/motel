@@ -14,16 +14,18 @@ pub mod ids;
 mod render;
 mod searched;
 mod show;
+mod sql;
 pub mod time;
 mod why;
 
 use std::fmt;
 use std::path::Path;
 
-use motel_store::{Reader, StoreError};
+use motel_store::{Reader, StoreError, TimeWindow};
 
 pub use crate::searched::{Searched, Source};
 pub use crate::show::{ShowAnswer, ShowView, SHOW_LINE_CAP};
+pub use crate::sql::{SchemaAnswer, SqlAnswer};
 pub use crate::time::{Since, Tz};
 pub use crate::why::{Finding, FindingKind, WhyAnswer, WhyArgs, WhyEmpty};
 
@@ -128,5 +130,15 @@ impl Query {
     /// `motel show <id>`; `full` lifts the 200-line cap.
     pub fn show(&self, id: &str, full: bool) -> Result<ShowAnswer, QueryError> {
         show::show(self, id, full)
+    }
+
+    /// `motel sql "<select>"` over the `events` view; default window 24 h, at most 30 days.
+    pub fn sql(&self, query: &str, window: Option<TimeWindow>) -> Result<SqlAnswer, QueryError> {
+        sql::sql(self, query, window)
+    }
+
+    /// `motel schema`.
+    pub fn schema(&self) -> Result<SchemaAnswer, QueryError> {
+        sql::schema(self)
     }
 }
