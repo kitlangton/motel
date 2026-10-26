@@ -1,4 +1,4 @@
-//! The ids `show` accepts (api.md §2) and the event id format.
+//! The ids `show` accepts (`docs/agent-api.md` §2) and the event id format.
 //!
 //! Event ids name a row in the store without exposing file names:
 //! `e:<YYYYMMDD>.<rowid>` for a row in the day file of UTC arrival day `YYYY-MM-DD`,
