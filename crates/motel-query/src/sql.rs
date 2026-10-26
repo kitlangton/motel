@@ -1,4 +1,4 @@
-//! `motel sql` and `motel schema`: the escape hatch (api.md §6).
+//! `motel sql` and `motel schema`: the escape hatch (`docs/agent-api.md` §6).
 
 use motel_store::{SqlValue, StoreError, TimeWindow, NS_PER_DAY};
 use serde::Serialize;
@@ -44,7 +44,10 @@ pub const COLUMNS: &[(&str, &str)] = &[
     ("parent_id", "8-byte blob; null for root spans"),
     ("session_id", "session id attribute, when the app sends one"),
     ("request_id", "request id attribute, when the app sends one"),
-    ("res", "resources.id (host, service, version, pid)"),
+    (
+        "res",
+        "resource id within its file; use host, version and pid instead",
+    ),
     ("src", "ingest source id"),
     (
         "artifact",
@@ -55,6 +58,12 @@ pub const COLUMNS: &[(&str, &str)] = &[
         "attrs",
         "attributes as JSONB: read with attr(attrs, 'key') or json(attrs)",
     ),
+    (
+        "host",
+        "host.name of the sending process (from its resource)",
+    ),
+    ("version", "service.version of the sending process"),
+    ("pid", "process.pid of the sending process"),
 ];
 
 pub const EXAMPLES: &[(&str, &str)] = &[
@@ -76,7 +85,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ),
     (
         "events per pid",
-        "select r.pid, e.service, count(*) n from events e join resources r on r.id = e.res group by 1, 2 order by n desc",
+        "select pid, service, count(*) n from events group by 1, 2 order by n desc",
     ),
 ];
 
@@ -93,7 +102,9 @@ pub fn reference() -> String {
         out.push_str(&l);
         out.push('\n');
     }
-    out.push_str("view resources: id, host, service, version, pid\n");
+    out.push_str(
+        "host, version and pid are per-event columns; resource ids are per file, so there is no resources table\n",
+    );
     out.push_str("attr(attrs, 'http.route') reads one attribute (text, number or null)\n");
     out.push_str("examples\n");
     for (what, sql) in EXAMPLES {
@@ -121,6 +132,15 @@ pub(crate) fn sql(
     window: Option<TimeWindow>,
 ) -> Result<SqlAnswer, QueryError> {
     let ctx = Ctx::new(q);
+    if let Some(w) = window {
+        if w.start_ns > w.end_ns {
+            return Err(QueryError::BadTime(format!(
+                "--since {} is after --until {}",
+                crate::time::iso(w.start_ns),
+                crate::time::iso(w.end_ns)
+            )));
+        }
+    }
     let table = match q.reader.sql_table(query, window) {
         Ok(t) => t,
         Err(e @ (StoreError::Sqlite(_) | StoreError::UnauthorizedSql(_) | StoreError::Other(_))) => {
@@ -286,10 +306,10 @@ pub(crate) fn schema(q: &Query) -> Result<SchemaAnswer, QueryError> {
     let next = match seen.first() {
         Some((s, _, _)) => vec![
             format!("motel why {}", crate::render::shell_arg(s)),
-            format!(
-                "motel sql \"select kind, name, count(*) n from events where service = '{}' group by 1, 2 order by n desc limit 20\"",
+            crate::render::motel_sql(&format!(
+                "select kind, name, count(*) n from events where service = '{}' group by 1, 2 order by n desc limit 20",
                 crate::render::sql_str(s)
-            ),
+            )),
         ],
         None => vec!["motel why".to_owned()],
     };

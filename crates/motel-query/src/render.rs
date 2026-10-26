@@ -1,6 +1,6 @@
 //! Plain-text building blocks shared by every answer.
 
-/// Longest body or message printed in a list row (api.md §7).
+/// Longest body or message printed in a list row (`docs/agent-api.md` §7).
 pub const LIST_BODY_CHARS: usize = 300;
 
 /// One line, whitespace collapsed, newlines shown as `↵`, cut to `max` chars with `…`.
@@ -136,6 +136,20 @@ pub fn sql_str(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// A `motel sql` command line for `query`. Double quotes when nothing in the query is special
+/// inside them (the common case, and easier to read around SQL's single quotes), otherwise
+/// single quotes with `'\''` escaping.
+pub fn motel_sql(query: &str) -> String {
+    if query
+        .chars()
+        .any(|c| matches!(c, '"' | '$' | '`' | '\\' | '!'))
+    {
+        format!("motel sql '{}'", query.replace('\'', r"'\''"))
+    } else {
+        format!("motel sql \"{query}\"")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +160,19 @@ mod tests {
         assert_eq!(one_line("abcdef", 4), "abc…");
         assert_eq!(one_line("abcd", 4), "abcd");
         assert_eq!(one_line("  x  ", 4), "x");
+    }
+
+    #[test]
+    fn sql_commands_survive_the_shell() {
+        assert_eq!(
+            motel_sql("select 1 where s = 'a''b'"),
+            r#"motel sql "select 1 where s = 'a''b'""#
+        );
+        assert_eq!(
+            motel_sql("select 1 where s = '$(rm -rf ~)\"'"),
+            r#"motel sql 'select 1 where s = '\''$(rm -rf ~)"'\'''"#
+        );
+        assert_eq!(shell_arg("it's"), r"'it'\''s'");
     }
 
     #[test]
