@@ -1,26 +1,30 @@
-//! `motel show <id>`: one id, the view picked from its shape (api.md §2).
+//! `motel show <id>`: one id, the view picked from its shape (`docs/agent-api.md` §2).
 
 use std::collections::{HashMap, HashSet};
 
 use motel_store::{EventKind, EventRow, NS_PER_DAY, NS_PER_MINUTE, NS_PER_SECOND};
 use serde::Serialize;
 
-use crate::data::{attr, attr_str, event_group_id, event_message, Ctx};
+use crate::data::{attr, attr_str, event_group_id, event_message, Ctx, ErrRow, ErrScan};
 use crate::fingerprint::{fingerprint, normalize};
 use crate::ids::{classify, event_id, hex, EventRef, ShowId};
+
+const NS_PER_MILLI: i64 = 1_000_000;
 use crate::render::{
-    count, finish, one_line, plural, severity_name, shell_arg, table, LIST_BODY_CHARS,
+    count, finish, motel_sql, one_line, plural, severity_name, shell_arg, table, LIST_BODY_CHARS,
 };
 use crate::searched::Searched;
 use crate::time::{fmt_dur, fmt_range, fmt_time, fmt_time_ms, iso};
 use crate::why::run_summary;
 use crate::{Answer, Query, QueryError};
 
-/// Lines a `show` prints unless `--full` (api.md §7).
+/// Lines a `show` prints unless `--full` (`docs/agent-api.md` §7).
 pub const SHOW_LINE_CAP: usize = 200;
 /// Lines of the trace tree inside an event view.
 const EVENT_TRACE_LINES: usize = 40;
 const SESSION_LIMIT: usize = 1000;
+/// Events listed on each side of an event in its context.
+const CONTEXT_SIDE: usize = 30;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShowAnswer {
@@ -71,7 +75,20 @@ pub struct EventJson {
     pub request_id: Option<String>,
     pub artifact: Option<String>,
     pub body: Option<String>,
-    pub attrs: serde_json::Value,
+    /// The stored JSON text, embedded as-is when serialized; text rendering never parses it.
+    #[serde(serialize_with = "raw_json")]
+    pub attrs: Option<String>,
+}
+
+fn raw_json<S: serde::Serializer>(v: &Option<String>, ser: S) -> Result<S::Ok, S::Error> {
+    use serde::Serialize as _;
+    match v
+        .as_deref()
+        .and_then(|a| serde_json::from_str::<&serde_json::value::RawValue>(a).ok())
+    {
+        Some(raw) => raw.serialize(ser),
+        None => ser.serialize_none(),
+    }
 }
 
 impl EventJson {
@@ -96,11 +113,7 @@ impl EventJson {
                 Some(n) => ev.body.as_deref().map(|b| one_line(b, n)),
                 None => ev.body.clone(),
             },
-            attrs: ev
-                .attrs
-                .as_deref()
-                .and_then(|a| serde_json::from_str(a).ok())
-                .unwrap_or(serde_json::Value::Null),
+            attrs: ev.attrs.clone(),
         }
     }
 }
@@ -115,7 +128,7 @@ pub struct TraceItem {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TraceView {
-    pub trace_id: String,
+    pub trace_id: Option<String>,
     pub start: Option<String>,
     pub duration_ms: f64,
     pub spans: usize,
@@ -240,7 +253,7 @@ pub(crate) fn show(q: &Query, id: &str, full: bool) -> Result<ShowAnswer, QueryE
     let id = id.trim().to_owned();
     let mut notes = Vec::new();
     let built = match classify(&id) {
-        ShowId::Trace(t) => match show_trace(&ctx, &t, None)? {
+        ShowId::Trace(t) => match show_trace(&ctx, Some(&t), None)? {
             Some(b) => b,
             None => show_other(&ctx, &id, &["trace"])?,
         },
@@ -249,8 +262,18 @@ pub(crate) fn show(q: &Query, id: &str, full: bool) -> Result<ShowAnswer, QueryE
             if timed_out {
                 notes.push("span lookup reads whole days; stopped at its 2 s budget".to_owned());
             }
-            match span.and_then(|sp| sp.trace_id.map(|t| (sp, t))) {
-                Some((sp, t)) => show_trace(&ctx, &t, Some(sp))?.expect("span's own trace"),
+            match span {
+                Some(sp) => {
+                    let t = sp.trace_id;
+                    match t {
+                        Some(t) => show_trace(&ctx, Some(&t), Some(sp))?,
+                        None => {
+                            notes.push("the span has no trace id; showing it alone".to_owned());
+                            show_trace(&ctx, None, Some(sp))?
+                        }
+                    }
+                    .unwrap_or_else(|| not_found(&ctx, &id, &["span"]))
+                }
                 None => show_other(&ctx, &id, &["span"])?,
             }
         }
@@ -288,11 +311,10 @@ fn not_found(ctx: &Ctx<'_>, id: &str, kinds: &[&str]) -> Built {
     let what = if kinds.is_empty() {
         "nothing".to_owned()
     } else {
-        let (last, rest) = kinds.split_last().expect("non-empty");
-        if rest.is_empty() {
-            format!("no {last}")
-        } else {
-            format!("no {} or {last}", rest.join(", "))
+        match kinds.split_last() {
+            Some((last, [])) => format!("no {last}"),
+            Some((last, rest)) => format!("no {} or {last}", rest.join(", ")),
+            None => "nothing".to_owned(),
         }
     };
     Built {
@@ -303,10 +325,10 @@ fn not_found(ctx: &Ctx<'_>, id: &str, kinds: &[&str]) -> Built {
         },
         next: vec![
             "motel why".to_owned(),
-            format!(
-                "motel sql \"select * from events where instr(body, '{}') > 0 limit 20\"",
+            motel_sql(&format!(
+                "select * from events where instr(body, '{}') > 0 limit 20",
                 crate::render::sql_str(id)
-            ),
+            )),
         ],
         start,
         end: ctx.now,
@@ -315,14 +337,22 @@ fn not_found(ctx: &Ctx<'_>, id: &str, kinds: &[&str]) -> Built {
 
 // ---------------------------------------------------------------- trace and span
 
+/// A trace, or with `focus` a span inside its trace. A focused span with no trace id, or
+/// whose trace read came back empty (a time budget), is shown as a one-row tree.
 fn show_trace(
     ctx: &Ctx<'_>,
-    trace_id: &[u8; 16],
+    trace_id: Option<&[u8; 16]>,
     focus: Option<EventRow>,
 ) -> Result<Option<Built>, QueryError> {
-    let (rows, truncated) = ctx.trace(trace_id)?;
+    let (mut rows, truncated) = match trace_id {
+        Some(t) => ctx.trace(t)?,
+        None => (Vec::new(), false),
+    };
     if rows.is_empty() {
-        return Ok(None);
+        match &focus {
+            Some(sp) => rows.push(sp.clone()),
+            None => return Ok(None),
+        }
     }
     let (view, tree_lines) = trace_view(
         ctx,
@@ -344,7 +374,9 @@ fn show_trace(
             if sp.err {
                 next.push(format!("motel show {}", event_id(&sp.day, sp.row_id)));
             }
-            next.push(format!("motel show {}", hex(trace_id)));
+            if let Some(t) = trace_id {
+                next.push(format!("motel show {}", hex(t)));
+            }
             ShowView::Span {
                 span: Box::new(span),
                 trace: Box::new(view),
@@ -360,7 +392,9 @@ fn show_trace(
         if !next.contains(&format!("motel show {eid}")) {
             next.push(format!("motel show {eid}"));
         }
-        next.push(format!("motel show {}", event_group_id(e)));
+        if let Some(g) = event_group_id(e) {
+            next.push(format!("motel show {g}"));
+        }
     }
     if let Some(s) = rows.iter().find_map(|r| r.session_id.clone()) {
         next.push(format!("motel show {}", shell_arg(&s)));
@@ -436,7 +470,7 @@ fn trace_order(rows: &[EventRow]) -> Vec<(usize, usize)> {
 
 fn trace_view(
     ctx: &Ctx<'_>,
-    trace_id: &[u8; 16],
+    trace_id: Option<&[u8; 16]>,
     rows: &[EventRow],
     truncated: bool,
     focus: Option<[u8; 8]>,
@@ -464,7 +498,10 @@ fn trace_view(
             services.push(&r.service);
         }
     }
-    let mut header = format!("trace {}", hex(trace_id));
+    let mut header = match trace_id {
+        Some(t) => format!("trace {}", hex(t)),
+        None => "trace -".to_owned(),
+    };
     if let Some(r) = root {
         header.push_str(&format!(" · {}", r.name.as_deref().unwrap_or("?")));
     }
@@ -531,7 +568,7 @@ fn trace_view(
     }
     (
         TraceView {
-            trace_id: hex(trace_id),
+            trace_id: trace_id.map(|t| hex(t)),
             start: Some(iso(start)),
             duration_ms: (end - start) as f64 / 1e6,
             spans,
@@ -716,7 +753,7 @@ fn show_event(ctx: &Ctx<'_>, ev: EventRow, full: bool) -> Result<Built, QueryErr
     }
     lines.extend(fields);
 
-    let group = ev.err.then(|| event_group_id(&ev));
+    let group = event_group_id(&ev);
     if let Some(g) = &group {
         lines.push(format!("group     {g}"));
     }
@@ -787,13 +824,36 @@ fn show_event(ctx: &Ctx<'_>, ev: EventRow, full: bool) -> Result<Built, QueryErr
             .collect()
     } else {
         push_body(&mut lines, &ev);
-        let (around, more) = ctx.events_between(start, end, Some(&ev.service), None, 60, false)?;
+        // Centered on the event: the newest CONTEXT_SIDE before it, the event, and the
+        // oldest CONTEXT_SIDE after it.
+        let is_ev = |c: &EventRow| c.day == ev.day && c.row_id == ev.row_id;
+        let (mut around, mut more) = ctx.events_between(
+            start,
+            ev.ts,
+            Some(&ev.service),
+            None,
+            CONTEXT_SIDE + 1,
+            true,
+        )?;
+        around.retain(|c| !is_ev(c));
+        if around.len() > CONTEXT_SIDE {
+            around.drain(..around.len() - CONTEXT_SIDE);
+            more = true;
+        }
+        around.push(ev.clone());
+        let (after, more_after) =
+            ctx.events_between(ev.ts + 1, end, Some(&ev.service), None, CONTEXT_SIDE, false)?;
+        around.extend(after);
         lines.push(String::new());
         lines.push(format!(
             "context: {} ±30s · {}{}",
             ev.service,
             plural(around.len() as u64, "event", "events"),
-            if more { " (first 60)" } else { "" }
+            if more || more_after {
+                format!(" (nearest {CONTEXT_SIDE} each side)")
+            } else {
+                String::new()
+            }
         ));
         lines.extend(event_rows(&around, Some((&ev.day, ev.row_id)), ev.ts, ctx));
         around
@@ -806,7 +866,7 @@ fn show_event(ctx: &Ctx<'_>, ev: EventRow, full: bool) -> Result<Built, QueryErr
     if let Some(t) = ev.trace_id {
         let (rows, truncated) = ctx.trace(&t)?;
         if !rows.is_empty() {
-            let (view, tree) = trace_view(ctx, &t, &rows, truncated, None);
+            let (view, tree) = trace_view(ctx, Some(&t), &rows, truncated, None);
             lines.push(String::new());
             let cap = if full { usize::MAX } else { EVENT_TRACE_LINES };
             let n = tree.len();
@@ -975,41 +1035,64 @@ fn crash_frames(ev: &EventRow) -> Vec<String> {
 
 // ---------------------------------------------------------------- group
 
+/// `g:` ids name groups of the error kinds kept in day files (crashes, runs and failed tests
+/// have event and run ids instead), so a group is searched for in every file on disk, the
+/// same reach as `why --since`.
 fn show_group(ctx: &Ctx<'_>, gid: &str) -> Result<Built, QueryError> {
-    let start = ctx.now - 14 * NS_PER_DAY;
     let end = ctx.now;
     let target = u32::from_str_radix(gid.trim_start_matches("g:").get(..8).unwrap_or(""), 16).ok();
     let Some(target) = target else {
         return Ok(not_found(ctx, gid, &["error group"]));
     };
     // Find one member, then count the group within its service, kind and name.
-    let mut hit: Option<(u64, String, String, Option<String>)> = None;
-    ctx.scan_errors(start, end, None, None, usize::MAX, ctx.deadline, |r| {
-        let fp = fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg);
-        if (fp >> 32) as u32 == target {
-            hit = Some((fp, r.service, r.kind, r.name));
-            return false;
-        }
-        true
-    })?;
-    let Some((fp, service, kind, name)) = hit else {
+    let mut hit: Option<(u64, ErrRow)> = None;
+    ctx.scan_errors(
+        &ErrScan {
+            start: 0,
+            end,
+            services: None,
+            kind_name: None,
+            ordered: false,
+            cap: usize::MAX,
+            deadline: ctx.deadline,
+        },
+        |r| {
+            let fp = fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg);
+            if (fp >> 32) as u32 == target {
+                hit = Some((fp, r));
+                return false;
+            }
+            true
+        },
+    )?;
+    let Some((fp, member)) = hit else {
         return Ok(not_found(ctx, gid, &["error group"]));
     };
+    let (service, kind, name) = (
+        member.service.clone(),
+        member.kind.clone(),
+        member.name.clone(),
+    );
 
     let mut n = 0u64;
-    let mut first = i64::MAX;
-    let mut last = i64::MIN;
+    let mut first = member.ts;
+    let mut last = member.ts;
     let mut samples: Vec<EventRef> = Vec::new();
     let mut sample_msgs: HashSet<String> = HashSet::new();
     let mut traces: Vec<([u8; 16], i64)> = Vec::new();
-    let mut message = String::new();
+    let mut message = normalize(&member.msg);
+    // Newest first across files, so the samples and traces kept are the newest.
+    let services = [service.clone()];
     let scan = ctx.scan_errors(
-        start,
-        end,
-        Some(&service),
-        Some((&kind, name.as_deref())),
-        1_000_000,
-        ctx.deadline,
+        &ErrScan {
+            start: 0,
+            end,
+            services: Some(&services),
+            kind_name: Some((&kind, name.as_deref())),
+            ordered: true,
+            cap: 1_000_000,
+            deadline: ctx.deadline,
+        },
         |r| {
             if fingerprint(&r.service, &r.kind, r.name.as_deref(), &r.msg) != fp {
                 return true;
@@ -1017,7 +1100,7 @@ fn show_group(ctx: &Ctx<'_>, gid: &str) -> Result<Built, QueryError> {
             n += 1;
             first = first.min(r.ts);
             last = last.max(r.ts);
-            if message.is_empty() {
+            if n == 1 {
                 message = normalize(&r.msg);
             }
             if samples.len() < 3 && sample_msgs.insert(r.msg.clone()) {
@@ -1044,6 +1127,10 @@ fn show_group(ctx: &Ctx<'_>, gid: &str) -> Result<Built, QueryError> {
         fmt_range(first, last, now, tz)
     )];
     lines.push(format!("message  {message}"));
+    if n == 0 {
+        n = 1;
+        samples.push(member.ev.clone());
+    }
     if scan.truncated {
         lines.push(
             "(count stopped at the scan budget; the group has at least this many)".to_owned(),
@@ -1096,7 +1183,7 @@ fn show_group(ctx: &Ctx<'_>, gid: &str) -> Result<Built, QueryError> {
         }),
         lines,
         next,
-        start,
+        start: first.min(ctx.now - 14 * NS_PER_DAY),
         end,
     })
 }
@@ -1113,29 +1200,31 @@ fn show_run(ctx: &Ctx<'_>, run: EventRow) -> Result<Built, QueryError> {
         .unwrap_or_else(|| "run".to_owned());
     let exit_code = attr(&run, "exit_code").or_else(|| attr(&run, "process.exit_code"));
 
-    // The run's spans: its trace, else its session, else everything during the run.
-    let linked: Vec<EventRow> = if let Some(t) = run.trace_id {
-        ctx.trace(&t)?.0
-    } else if let Some(s) = &run.session_id {
-        ctx.by_key(s, false, SESSION_LIMIT)?.0
-    } else {
-        Vec::new()
+    // The run's spans: its trace, else its session's spans during the run, else every span
+    // during the run.
+    let timed = |r: &EventRow| r.kind == EventKind::Span && r.dur.is_some() && !is_wrapper(r, &run);
+    let mut spans: Vec<EventRow> = match run.trace_id {
+        Some(t) => ctx.trace(&t)?.0.into_iter().filter(timed).collect(),
+        None => Vec::new(),
     };
-    let mut spans: Vec<EventRow> = if linked.is_empty() {
-        ctx.slowest_spans(start, end.max(start + 1), 10)?
-    } else {
-        let mut s: Vec<EventRow> = linked
-            .into_iter()
-            .filter(|r| r.kind == EventKind::Span && r.dur.is_some())
-            .collect();
-        // The root span of a run's trace mirrors the run itself.
-        if s.iter().any(|r| r.parent_id.is_some()) {
-            s.retain(|r| r.parent_id.is_some());
+    if spans.is_empty() {
+        if let Some(s) = &run.session_id {
+            spans = ctx
+                .by_key(s, false, SESSION_LIMIT)?
+                .0
+                .into_iter()
+                .filter(|r| timed(r) && (end <= start || (r.ts >= start && r.ts <= end)))
+                .collect();
         }
-        s.sort_by(|a, b| b.dur.cmp(&a.dur).then(a.ts.cmp(&b.ts)));
-        s.truncate(10);
-        s
-    };
+    }
+    if spans.is_empty() {
+        spans = ctx
+            .slowest_spans(start, end.max(start + 1), 11)?
+            .into_iter()
+            .filter(timed)
+            .collect();
+    }
+    spans.sort_by(|a, b| b.dur.cmp(&a.dur).then(a.ts.cmp(&b.ts)));
     spans.truncate(10);
 
     let mut slow = Vec::new();
@@ -1273,6 +1362,22 @@ fn show_run(ctx: &Ctx<'_>, run: EventRow) -> Result<Built, QueryError> {
         end: end.max(start + 1),
         notes: vec!["p50s come from the 7 days before the run".to_owned()],
     })
+}
+
+/// A span that mirrors the run itself: the run's own span, or a root of the run's trace that
+/// lies within the run (50 ms slack) and covers at least 90% of it.
+fn is_wrapper(sp: &EventRow, run: &EventRow) -> bool {
+    if sp.span_id.is_some() && sp.span_id == run.span_id {
+        return true;
+    }
+    if sp.parent_id.is_some() || run.trace_id.is_none() || sp.trace_id != run.trace_id {
+        return false;
+    }
+    let (Some(d), Some(rd)) = (sp.dur, run.dur) else {
+        return false;
+    };
+    let slack = 50 * NS_PER_MILLI;
+    sp.ts >= run.ts - slack && sp.ts + d <= run.ts + rd + slack && d >= rd / 10 * 9
 }
 
 fn is_last(ctx: &Ctx<'_>, run: &EventRow) -> Result<bool, QueryError> {
