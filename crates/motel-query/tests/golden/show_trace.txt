@@ -1,0 +1,12 @@
+trace 4ba7035fbb1773cf2b87e33f9bf753af · GET /users/:id · 182ms · 4 spans, 2 logs, 1 error · 14:40:00 · api, auth
+  +0ms  182ms  GET /users/:id [api]
+  +1ms           · INFO GET /users/8812 start
+  +2ms   12ms    auth.check [auth]
+ +15ms  140ms    db.query
++156ms   25ms    users.load  ERR TypeError: Cannot read properties of undefined (reading 'id') at /srv/api/src/users.ts:44:17  e:20261025.296
++170ms             · WARN user cache miss for 8812
+searched: last 14d (since Oct 11 15:00) · 7 days 2026-10-19 → 2026-10-25 + evidence · host devbox · via daemon · last write 2m ago
+next:
+  motel show e:20261025.296
+  motel show g:bcbc6d3a
+  motel show ses_demo1

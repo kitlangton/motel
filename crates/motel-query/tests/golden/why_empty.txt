@@ -1,0 +1,24 @@
+$ motel why batch
+why batch: no errors, crashes or failed runs in the last 14d.
+batch is quiet: last event Oct 22 15:02:00 (2d ago).
+searched: last 14d (since Oct 11 15:00) · 7 days 2026-10-19 → 2026-10-25 + evidence · host devbox · via daemon · last write 2m ago
+note: nothing in the last 24h; walked back to 14d
+next:
+  motel sql "select kind, name, count(*) n from events where service = 'batch' group by 1, 2 order by n desc"
+  motel why
+
+$ motel why apii
+why apii: no events from a service named "apii".
+did you mean: api
+services seen in 14 days: api, worker, cargo, auth, batch, cron
+searched: last 14d (since Oct 11 15:00) · 7 days 2026-10-19 → 2026-10-25 + evidence · host devbox · via daemon · last write 2m ago
+next:
+  motel why api
+  motel why
+
+$ motel why   # empty store
+why: no events recorded on this host yet; the store is empty.
+searched: last 24h (since Oct 24 15:00) · no day files · host devbox · via daemon · store empty
+next:
+  motel status
+  motel schema

@@ -1,0 +1,22 @@
+run run:3 · cargo test -p api · exit 101 · 1m35s · 13:30:00 → 13:31:35
+trace          6deb69e765e361df5ddb59d755d351cf
+status         fail · err
+  exit_code    101
+  run.command  cargo test -p api
+failed tests (2)
+  13:30:40  users::create_rejects_dupes  e:ev.4
+    assertion `left == right` failed ↵ left: 201 ↵ right: 409
+  13:30:52  users::get_missing_returns_404  e:ev.5
+    called `Option::unwrap()` on a `None` value
+slowest spans (4) vs 7-day p50 by name
+    dur    p50  x p50  service  trace                             span
+   2.4s  300ms   8.0x  api      6deb69e765e361df5ddb59d755d351cf  db.query
+   1.9s  300ms   6.3x  api      6deb69e765e361df5ddb59d755d351cf  db.query
+  800ms      -    new  api      6deb69e765e361df5ddb59d755d351cf  http.request GET /users
+  600ms      -    new  api      6deb69e765e361df5ddb59d755d351cf  fixtures.load
+searched: 13:30 → 13:31 (2m) · 7 days 2026-10-19 → 2026-10-25 + evidence · host devbox · via daemon · last write 2m ago
+note: p50s come from the 7 days before the run
+next:
+  motel show e:ev.4
+  motel show 6deb69e765e361df5ddb59d755d351cf
+  motel why --since run:last

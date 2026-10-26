@@ -1,0 +1,14 @@
+why all services · 1 crash, 10 errors in 4 groups (3 new), 1 failed run
+#  finding     service  count  when                 id          summary
+1  CRASH       worker       1  13:00:00             e:ev.2      thread 'main' panicked at 'index out of bounds: the len is 3 but the index is 7', src/queue.rs:88:14
+2  NEW         api          3  12:20:00 → 14:40:00  g:bcbc6d3a  span users.load: TypeError: Cannot read properties of undefined (reading 'id') at /srv/api/src/users.ts:44:17
+3  NEW         api          2  10:00:00 → 14:00:00  g:477c6043  log: upstream rate limited: retry in 30s
+4  NEW         api          1  Oct 24 19:00:00      g:df12d0f4  log: disk quota exceeded on /var/lib/api/cache
+5  FAILED RUN  cargo        1  13:30:00             run:3       cargo test -p api (exit 101, 2 tests failed, 1m35s)
+6  RECURRING   api          4  09:00:00 → 14:10:00  g:24669727  log: db timeout after 5000ms (conn 12, host 10.0.0.12)
+NEW = not seen in the 7 days before Oct 24 15:00
+searched: last 24h (since Oct 24 15:00) · 7 days 2026-10-19 → 2026-10-25 + evidence · host devbox · via daemon · last write 2m ago
+next:
+  motel show e:ev.2
+  motel show g:bcbc6d3a
+  motel show g:477c6043
