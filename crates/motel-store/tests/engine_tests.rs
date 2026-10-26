@@ -1309,3 +1309,61 @@ fn query_file_and_sql_table_reader_primitives() {
     drop(store);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn sql_table_resource_columns_do_not_cross_files() {
+    let dir = temp_test_dir("sql-resources");
+    let day1 = 1_792_800_000 * NS_PER_SECOND;
+    let day2 = day1 + NS_PER_DAY;
+    let clock = Arc::new(ManualClock::new(day1));
+    let store = Store::open_with_clock(StoreConfig::new(&dir), clock.clone()).unwrap();
+    let writer = store.writer();
+    let on_host = |ts: i64, host: &str| {
+        let mut e = sample_event(ts, "api", EventKind::Log, false);
+        if let Some(r) = e.resource.as_mut() {
+            r.host = Some(host.to_owned());
+        }
+        e
+    };
+    // Resource id 1 is host "a" in the first file and host "b" in the second.
+    writer
+        .submit((0..3).map(|i| on_host(day1 + i, "a")).collect())
+        .unwrap()
+        .wait()
+        .unwrap();
+    clock.set_ns(day2);
+    writer
+        .submit(vec![on_host(day2, "b"), on_host(day2 + 1, "b"), on_host(day2 + 2, "a")])
+        .unwrap()
+        .wait()
+        .unwrap();
+    writer.wait_for_seals().unwrap();
+    let reader = store.reader();
+    reader.refresh_catalog().unwrap();
+
+    let table = reader
+        .sql_table(
+            "SELECT host, count(*) n FROM events GROUP BY host ORDER BY host",
+            Some(TimeWindow::new(day1 - NS_PER_HOUR, day2 + NS_PER_HOUR)),
+        )
+        .unwrap();
+    assert_eq!(
+        table.rows,
+        vec![
+            vec![SqlValue::Text("a".to_owned()), SqlValue::Integer(4)],
+            vec![SqlValue::Text("b".to_owned()), SqlValue::Integer(2)],
+        ]
+    );
+    let err = reader.sql_table("SELECT * FROM resources", None).unwrap_err();
+    assert!(err.to_string().contains("events.host"), "{err}");
+    let empty = reader
+        .sql_table(
+            "SELECT host, version, pid FROM events",
+            Some(TimeWindow::new(day1 - 3 * NS_PER_DAY, day1 - 2 * NS_PER_DAY)),
+        )
+        .unwrap();
+    assert_eq!(empty.columns, ["host", "version", "pid"]);
+    assert!(empty.rows.is_empty());
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}

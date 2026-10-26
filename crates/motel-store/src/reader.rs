@@ -726,25 +726,35 @@ impl Reader {
             conn.execute(&format!("ATTACH DATABASE ?1 AS {alias}"), params![uri])?;
         }
 
+        // Resource ids are per file, so `resources` is not exposed: each branch joins its own
+        // file's resources and `events` carries `host`, `version` and `pid` as columns. SQLite
+        // drops the join when a query uses none of them. A temp view shadows the attached
+        // `resources` tables so a direct read fails with a pointer to those columns.
+        conn.execute_batch(
+            "CREATE TEMP VIEW resources AS
+               SELECT * FROM \"resources is per file; use events.host, events.version, events.pid\";",
+        )?;
         if candidates.is_empty() {
             let ddl = crate::schema::base_ddl(true, false);
             conn.execute_batch(&ddl)?;
+            conn.execute_batch(
+                "CREATE TEMP VIEW events AS
+                   SELECT e.*, NULL AS host, NULL AS version, NULL AS pid FROM main.events e;",
+            )?;
         } else {
             let mut branches = Vec::with_capacity(candidates.len());
-            let mut res_branches = Vec::with_capacity(candidates.len());
             let w0 = win.start_ns;
             let w1 = win.end_ns;
             for idx in 0..candidates.len() {
                 branches.push(format!(
-                    "SELECT * FROM d{idx}.events WHERE ts BETWEEN {w0} AND {w1}"
+                    "SELECT e.*, r.host AS host, r.version AS version, r.pid AS pid
+                     FROM d{idx}.events e LEFT JOIN d{idx}.resources r ON r.id = e.res
+                     WHERE e.ts BETWEEN {w0} AND {w1}"
                 ));
-                res_branches.push(format!("SELECT * FROM d{idx}.resources"));
             }
             let view_sql = format!(
-                "CREATE TEMP VIEW events AS {};
-                 CREATE TEMP VIEW resources AS {};",
-                branches.join(" UNION ALL "),
-                res_branches.join(" UNION ALL ")
+                "CREATE TEMP VIEW events AS {};",
+                branches.join(" UNION ALL ")
             );
             conn.execute_batch(&view_sql)?;
         }
