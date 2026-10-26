@@ -326,12 +326,16 @@ fn checkpointer_loop(
         .checked_sub(Duration::from_secs(10))
         .unwrap_or_else(Instant::now);
     let mut restart_backoff = false;
+    let mut has_uncheckpointed = false;
+    let mut last_checked_bytes = 0u64;
 
     loop {
         let cur_tracked = bytes_since_reset.load(Ordering::Relaxed);
+        let writer_active =
+            cur_tracked >= WAL_PASSIVE_THRESHOLD && (has_uncheckpointed || cur_tracked > last_checked_bytes);
         // Block indefinitely on rx.recv() when idle; run a 1 s timer (or 100 ms backoff)
-        // only while the WAL is >= 4 MiB (docs/engine.md §3.2).
-        let notified_bytes = if cur_tracked < WAL_PASSIVE_THRESHOLD && !restart_backoff {
+        // while active with WAL >= 4 MiB (docs/engine.md §3.2).
+        let notified_bytes = if !writer_active && !restart_backoff {
             match rx.recv() {
                 Ok(CheckpointerCmd::NotifyWalSize(b)) => b,
                 Ok(CheckpointerCmd::Stop(ack)) => {
@@ -375,10 +379,13 @@ fn checkpointer_loop(
         let active_bytes = bytes_since_reset.load(Ordering::Relaxed).max(wal_bytes);
         if active_bytes < WAL_PASSIVE_THRESHOLD {
             restart_backoff = false;
+            has_uncheckpointed = false;
+            last_checked_bytes = active_bytes;
             continue;
         }
         let is_over_restart = active_bytes >= WAL_RESTART_THRESHOLD;
         if !is_over_restart && !restart_backoff && last_passive.elapsed() < Duration::from_secs(1) {
+            has_uncheckpointed = true;
             continue;
         }
 
@@ -403,10 +410,25 @@ fn checkpointer_loop(
             if let Ok((p_busy, log_frames, ckpt_frames)) = passive_res {
                 let actual_wal_bytes = (log_frames.max(0) as u64) * frame_bytes;
                 metrics.update_peak_wal(actual_wal_bytes);
+                has_uncheckpointed = log_frames > ckpt_frames;
 
                 if actual_wal_bytes >= WAL_RESTART_THRESHOLD {
+                    // If the writer appended frames while PASSIVE was running, run one more
+                    // PASSIVE pass outside tx_lock so RESTART holds tx_lock as briefly as possible.
+                    let mut ready_for_restart = p_busy == 0;
+                    if ready_for_restart && (log_frames - ckpt_frames) > 256 {
+                        if let Ok((b2, l2, c2)) =
+                            c.query_row("PRAGMA wal_checkpoint(PASSIVE);", [], |r| {
+                                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                            })
+                        {
+                            ready_for_restart = b2 == 0;
+                            has_uncheckpointed = l2 > c2;
+                        }
+                    }
+
                     // Only attempt RESTART under tx_lock if PASSIVE was not blocked by an older reader.
-                    if p_busy == 0 {
+                    if ready_for_restart {
                         let restart_res: Result<(i64, i64, i64), _> = {
                             let _guard = tx_lock.lock().unwrap();
                             c.query_row("PRAGMA wal_checkpoint(RESTART);", [], |r| {
@@ -416,33 +438,32 @@ fn checkpointer_loop(
                         match restart_res {
                             Ok((0, r_log, r_ckpt)) if r_log == r_ckpt => {
                                 bytes_since_reset.store(0, Ordering::Relaxed);
+                                last_checked_bytes = 0;
+                                has_uncheckpointed = false;
                                 restart_backoff = false;
                             }
-                            Ok((_, r_log, _)) => {
-                                bytes_since_reset.store(
-                                    (r_log.max(0) as u64) * frame_bytes,
-                                    Ordering::Relaxed,
-                                );
+                            Ok((_, r_log, r_ckpt)) => {
+                                let rem = (r_log.max(0) as u64) * frame_bytes;
+                                bytes_since_reset.store(rem, Ordering::Relaxed);
+                                last_checked_bytes = rem;
+                                has_uncheckpointed = r_log > r_ckpt;
                                 restart_backoff = true;
                             }
                             Err(_) => {
                                 bytes_since_reset.store(actual_wal_bytes, Ordering::Relaxed);
+                                last_checked_bytes = actual_wal_bytes;
                                 restart_backoff = true;
                             }
                         }
                     } else {
                         bytes_since_reset.store(actual_wal_bytes, Ordering::Relaxed);
+                        last_checked_bytes = actual_wal_bytes;
                         restart_backoff = true;
                     }
                 } else {
                     restart_backoff = false;
-                    let uncheckpointed_frames = (log_frames - ckpt_frames).max(0) as u64;
-                    let uncheckpointed_bytes = uncheckpointed_frames * frame_bytes;
-                    if actual_wal_bytes < WAL_PASSIVE_THRESHOLD || uncheckpointed_bytes == 0 {
-                        bytes_since_reset.store(uncheckpointed_bytes, Ordering::Relaxed);
-                    } else {
-                        bytes_since_reset.store(actual_wal_bytes, Ordering::Relaxed);
-                    }
+                    bytes_since_reset.store(actual_wal_bytes, Ordering::Relaxed);
+                    last_checked_bytes = actual_wal_bytes;
                 }
             }
             let cpu_delta = current_thread_cpu_ns().saturating_sub(cpu0);
@@ -1392,14 +1413,6 @@ impl WriterThreadState {
         let n_batches = batches.len();
         let mut batch_errors: Vec<Option<String>> = vec![None; n_batches];
 
-        // Validate attrs per batch before starting any SQLite transaction so a malformed JSON
-        // attribute in one client's batch never aborts other clients' batches (Should-fix 8).
-        for (idx, b) in batches.iter().enumerate() {
-            if let Err(reason) = validate_batch_attrs(b, self.config.direct_jsonb) {
-                batch_errors[idx] = Some(reason);
-            }
-        }
-
         let mut hot_batch_indices: Vec<usize> = Vec::new();
         let mut ev_batch_indices: Vec<usize> = Vec::new();
         let mut hot_rows: Vec<&Event> = Vec::new();
@@ -1407,9 +1420,6 @@ impl WriterThreadState {
         let mut hot_bytes = 0usize;
 
         for (idx, b) in batches.iter().enumerate() {
-            if batch_errors[idx].is_some() {
-                continue;
-            }
             let mut b_has_hot = false;
             let mut b_has_ev = false;
             for r in &b.rows {
@@ -1417,7 +1427,6 @@ impl WriterThreadState {
                     b_has_ev = true;
                 } else {
                     b_has_hot = true;
-                    hot_rows.push(r);
                 }
             }
             for c in &b.cursors {
@@ -1425,6 +1434,25 @@ impl WriterThreadState {
                     b_has_ev = true;
                 } else {
                     b_has_hot = true;
+                }
+            }
+            // Only pre-validate in Rust when a single batch spans both hot and evidence files;
+            // otherwise SQLite's `jsonb(?)` (or `direct_jsonb` in `try_commit_once`) validates
+            // during INSERT and the per-batch fallback below isolates any bad batch without
+            // parsing JSON twice on the normal fast path.
+            if b_has_hot && b_has_ev {
+                if let Err(reason) = validate_batch_attrs(b, self.config.direct_jsonb) {
+                    batch_errors[idx] = Some(reason);
+                    continue;
+                }
+            }
+            for r in &b.rows {
+                if !r.is_evidence() {
+                    hot_rows.push(r);
+                }
+            }
+            for c in &b.cursors {
+                if !c.is_evidence {
                     hot_cursors.push(c);
                 }
             }
