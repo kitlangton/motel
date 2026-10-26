@@ -2,7 +2,6 @@ event e:ev.2 · crash · worker · panic · 13:00:00.000
 resource  host devbox · version 1.4.2 · pid 4242
 status    err
 artifact  crashes/worker-4242.txt
-group     g:551f73ad
 crash     thread 'main' panicked at 'index out of bounds: the len is 3 but the index is 7', src/queue.rs:88:14
 top frames (6)
   0: rust_begin_unwind
@@ -21,5 +20,4 @@ after: worker +30s · 1 event
   13:00:10.000  +10.0s  log INFO  worker restarted (pid 4300)
 searched: 12:58 → 13:00 (3m) · day 2026-10-25 + evidence · host devbox · via daemon · last write 2m ago
 next:
-  motel show g:551f73ad
   motel why worker

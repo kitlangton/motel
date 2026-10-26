@@ -1,4 +1,4 @@
-//! motel's agent query layer: `why`, `show`, `sql` and `schema` (api.md).
+//! motel's agent query layer: `why`, `show`, `sql` and `schema` (`docs/agent-api.md`).
 //!
 //! Every call returns a typed answer that renders two ways: [`Answer::text`], plain text
 //! sized for an agent's context, and [`Answer::json`], the same data plus the `next` list.
@@ -7,6 +7,14 @@
 //!
 //! The CLI, HTTP and MCP surfaces all call [`Query`]. Only the CLI and stdio MCP resolve git
 //! refs in `--since` ([`Query::resolve_since`] with a `cwd`); HTTP passes `None`.
+
+// Lets unit tests share the integration-test fixture, which names the crate.
+#[cfg(test)]
+extern crate self as motel_query;
+
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod fixture;
 
 mod data;
 pub mod fingerprint;
@@ -24,7 +32,7 @@ use std::path::Path;
 use motel_store::{Reader, StoreError, TimeWindow};
 
 pub use crate::searched::{Searched, Source};
-pub use crate::show::{ShowAnswer, ShowView, SHOW_LINE_CAP};
+pub use crate::show::{EventView, ShowAnswer, ShowView, SHOW_LINE_CAP};
 pub use crate::sql::{SchemaAnswer, SqlAnswer};
 pub use crate::time::{Since, Tz};
 pub use crate::why::{Finding, FindingKind, WhyAnswer, WhyArgs, WhyEmpty};

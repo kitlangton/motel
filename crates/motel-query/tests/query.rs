@@ -248,7 +248,7 @@ fn show_span_focuses_its_trace() {
         panic!("{:?}", s.view)
     };
     assert_eq!(span.span_id.as_deref(), Some(span_id.as_str()));
-    assert_eq!(trace.trace_id, hex(&T1));
+    assert_eq!(trace.trace_id.as_deref(), Some(hex(&T1).as_str()));
     let text = s.text();
     assert!(text
         .lines()
@@ -285,6 +285,16 @@ fn show_crash_has_frames_breadcrumbs_and_after() {
         e.context[0].body.as_deref(),
         Some("worker restarted (pid 4300)")
     );
+    // Crashes, runs and failed tests have their own ids, not error groups.
+    assert_eq!(e.group, None);
+    assert!(s.next.iter().all(|n| !n.contains(" g:")));
+    assert!(!s.text().lines().any(|l| l.starts_with("group")));
+    let t = f.query().show("e:ev.4", false).unwrap();
+    let ShowView::Event(t) = &t.view else {
+        panic!("{:?}", t.view)
+    };
+    assert_eq!(t.event.kind, "test");
+    assert_eq!(t.group, None);
 }
 
 #[test]
@@ -519,7 +529,25 @@ fn sql_and_schema() {
     let names: Vec<&str> = s.services.iter().map(|s| s.service.as_str()).collect();
     assert_eq!(names, ["api", "worker", "cargo", "auth", "batch", "cron"]);
     assert_eq!(s.examples.len(), 5);
-    assert_eq!(s.columns.len(), 20);
+    assert_eq!(s.columns.len(), 23);
+    // Every example runs.
+    for ex in &s.examples {
+        q.sql(ex, None).unwrap_or_else(|e| panic!("{ex}: {e}"));
+    }
+    // Resource fields are per-event columns.
+    let a = q
+        .sql(
+            "select pid, count(*) n from events where service = 'worker' group by 1 order by 1",
+            Some(motel_store::TimeWindow::new(NOW - 3 * H, NOW)),
+        )
+        .unwrap();
+    assert!(a.rows.iter().any(|r| r[0] == serde_json::json!(4242)));
+    match q.sql("select * from resources", None) {
+        Err(QueryError::Sql { message, .. }) => {
+            assert!(message.contains("events.host"), "{message}")
+        }
+        other => panic!("{:?}", other.map(|a| a.text())),
+    }
 }
 
 #[test]
@@ -559,4 +587,224 @@ fn every_answer_says_what_it_searched_and_what_next() {
         assert!((1..=3).contains(&next.len()), "{text}");
         assert!(json["searched"]["host"] == "devbox");
     }
+}
+
+fn row(ev: motel_store::Event) -> Row {
+    Row { arrive: ev.ts, ev }
+}
+
+fn err_log(ts: i64, service: &str, body: &str) -> motel_store::Event {
+    let mut e = log(ts, service, 17, body);
+    e.err = true;
+    e
+}
+
+fn event_view(f: &Fixture, id: &str) -> Box<motel_query::EventView> {
+    let s = f.query().show(id, false).unwrap();
+    match s.view {
+        ShowView::Event(e) => e,
+        v => panic!("{id}: {v:?}"),
+    }
+}
+
+#[test]
+fn group_ids_agree_on_every_surface() {
+    // Messages that used to fingerprint differently in SQL and Rust: an object-valued
+    // exception.message (JSONB), a whitespace-only body, and a body past 512 characters.
+    let t = trace(0x8f);
+    let base = NOW - 20 * M;
+    let mut root = span(base, "edge", "edge.req", 2 * S, t, 0x900, None);
+    root.err = true;
+    root.status = Some("error".to_owned());
+    root.attrs = Some(r#"{"exception.message":{"code":7,"detail":"bad gateway"}}"#.to_owned());
+    let mut blank = err_log(base + 100 * MS, "edge", " \n\t ");
+    blank.attrs = Some(r#"{"error.message":"upstream 502 after 3 tries"}"#.to_owned());
+    let mut long = err_log(
+        base + 200 * MS,
+        "edge",
+        &format!("{}tail 42", "é".repeat(600)),
+    );
+    for e in [&mut blank, &mut long] {
+        e.trace_id = Some(t);
+        e.span_id = Some(0x900u64.to_be_bytes());
+    }
+    let mut rows = rows();
+    rows.extend([row(root), row(blank), row(long)]);
+    let f = seeded_with("surfaces", rows);
+
+    let w = why(&f, Some("edge"), None);
+    assert_eq!(w.totals.error_events, 3);
+    let s = f.query().show(&hex(&t), false).unwrap();
+    let ShowView::Trace(tv) = &s.view else {
+        panic!("{:?}", s.view)
+    };
+    let errs: Vec<String> = tv
+        .items
+        .iter()
+        .filter(|i| i.event.err)
+        .map(|i| i.event.id.clone())
+        .collect();
+    assert_eq!(errs.len(), 3);
+    let mut groups = Vec::new();
+    for id in &errs {
+        let g = event_view(&f, id)
+            .group
+            .clone()
+            .expect("error event has a group");
+        assert!(
+            w.findings.iter().any(|x| x.id == g),
+            "{id}: {g} not in why {:#?}",
+            w.findings
+        );
+        let gs = f.query().show(&g, false).unwrap();
+        let ShowView::Group(gv) = &gs.view else {
+            panic!("{g}: {:?}", gs.view)
+        };
+        assert_eq!(gv.count, 1);
+        assert_eq!(gv.samples[0].id, *id);
+        groups.push(g);
+    }
+    assert!(s.next.contains(&format!("motel show {}", groups[0])));
+    groups.dedup();
+    assert_eq!(groups.len(), 3);
+}
+
+#[test]
+fn show_span_without_a_trace_renders_the_span_alone() {
+    let mut orphan = span(
+        NOW - 10 * M,
+        "api",
+        "orphan.work",
+        5 * MS,
+        T1,
+        0xdead_beef,
+        None,
+    );
+    orphan.trace_id = None;
+    let mut rows = rows();
+    rows.push(row(orphan));
+    let f = seeded_with("orphan", rows);
+    let s = f.query().show("00000000deadbeef", false).unwrap();
+    let ShowView::Span { span, trace } = &s.view else {
+        panic!("{:?}", s.view)
+    };
+    assert_eq!(span.name.as_deref(), Some("orphan.work"));
+    assert_eq!(trace.trace_id, None);
+    assert_eq!(trace.items.len(), 1);
+    assert!(s.text().contains("no trace id"));
+}
+
+#[test]
+fn show_run_falls_back_when_its_trace_holds_only_the_run() {
+    let start = NOW - 50 * M;
+    let mut run = ev(start, motel_store::EventKind::Run, "cargo");
+    run.name = Some("cargo build".to_owned());
+    run.status = Some("fail".to_owned());
+    run.err = true;
+    run.dur = Some(60 * S);
+    run.trace_id = Some(trace(0x91));
+    let mut rows = rows();
+    rows.push(row(run));
+    rows.push(row(span(
+        start + 10 * S,
+        "builder",
+        "compile crate",
+        3 * S,
+        trace(0x92),
+        0x777,
+        None,
+    )));
+    let f = seeded_with("run-fallback", rows);
+    let s = f.query().show("run:last", false).unwrap();
+    let ShowView::Run(r) = &s.view else {
+        panic!("{:?}", s.view)
+    };
+    assert_eq!(r.command, "cargo build");
+    assert_eq!(r.slowest_spans.len(), 1);
+    assert_eq!(r.slowest_spans[0].name, "compile crate");
+}
+
+#[test]
+fn show_event_context_is_centered_on_the_event() {
+    let t0 = NOW - 40 * M;
+    let mut rows = rows();
+    for i in 1..=50 {
+        rows.push(row(log(
+            t0 - i * 500 * MS,
+            "chatty",
+            9,
+            &format!("before {i}"),
+        )));
+        rows.push(row(log(
+            t0 + i * 500 * MS,
+            "chatty",
+            9,
+            &format!("after {i}"),
+        )));
+    }
+    rows.push(row(err_log(t0, "chatty", "the error")));
+    let f = seeded_with("centered", rows);
+    let w = why(&f, Some("chatty"), None);
+    let gs = f.query().show(&w.findings[0].id, false).unwrap();
+    let ShowView::Group(g) = &gs.view else {
+        panic!("{:?}", gs.view)
+    };
+    let e = event_view(&f, &g.samples[0].id);
+    let bodies: Vec<&str> = e.context.iter().filter_map(|c| c.body.as_deref()).collect();
+    assert_eq!(bodies.len(), 61);
+    assert_eq!(bodies[0], "before 30");
+    assert_eq!(bodies[30], "the error");
+    assert_eq!(bodies[60], "after 30");
+}
+
+#[test]
+fn show_group_samples_are_the_newest_across_files() {
+    let f = seeded("group-newest");
+    let w = why(&f, None, None);
+    let db = find(&w, "db timeout");
+    let s = f.query().show(&db.id, false).unwrap();
+    let ShowView::Group(g) = &s.view else {
+        panic!()
+    };
+    assert_eq!(g.count, 6);
+    assert_eq!(g.samples[0].time, g.last);
+}
+
+#[test]
+fn bad_windows_are_errors() {
+    let f = seeded("bad-window");
+    let q = f.query();
+    let err = q
+        .why(&WhyArgs {
+            since: Some(NOW - H),
+            until: Some(NOW - 2 * H),
+            ..Default::default()
+        })
+        .unwrap_err();
+    assert!(matches!(err, QueryError::BadTime(_)), "{err}");
+    assert!(matches!(
+        q.sql("select 1", Some(motel_store::TimeWindow::new(NOW, NOW - H))),
+        Err(QueryError::BadTime(_))
+    ));
+    // Reads as a duration and as a short hash; outside a repo it is the duration.
+    assert_eq!(
+        q.resolve_since("0000100d", Some(&f.dir)).unwrap(),
+        NOW - 100 * D
+    );
+    assert_eq!(q.resolve_since("0000100d", None).unwrap(), NOW - 100 * D);
+}
+
+#[test]
+fn next_commands_quote_odd_service_names() {
+    let mut rows = rows();
+    rows.push(row(log(NOW - 3 * D, "it's $HOME", 9, "hello")));
+    let f = seeded_with("quote", rows);
+    let w = why(&f, Some("it's $HOME"), None);
+    assert!(
+        w.next
+            .iter()
+            .any(|n| n == r"motel sql 'select kind, name, count(*) n from events where service = '\''it'\'''\''s $HOME'\'' group by 1, 2 order by n desc'"),
+        "{:#?}",
+        w.next
+    );
 }
